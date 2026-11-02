@@ -121,7 +121,7 @@
         <input id="split-char" type="number" min="1" step="1">
       </label>
       <label class="field">
-        <span>下半块条号 <code>law_num</code>（可选，留空则与原块相同）</span>
+        <span>下半块条号 <code>law_num</code>（可选；留空会自动识别切点处的「第X条」，识别不到则继承原块）</span>
         <input id="split-law-num" type="text" spellcheck="false" placeholder="例如：第二条 或 5.2.1">
       </label>
       <div class="dialog-errors" id="split-errors" hidden></div>
@@ -187,6 +187,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.2-p2b" defer></script>
+  <script src="/static/app.js?v=0.3.3-p2c" defer></script>
 </body>
 </html>

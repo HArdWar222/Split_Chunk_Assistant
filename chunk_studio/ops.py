@@ -32,6 +32,9 @@ from .align import locate_text_span, norm_line
 
 RE_ID = re.compile(r"^.+-(\d{4,})(?:-p(\d+))?$")
 
+#: 条号识别：行首（允许列表符 / 加粗 / 标题记号 / 全角空格）的「第X条」
+RE_LAW_NUM = re.compile(r"^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条")
+
 CHUNK_KINDS = frozenset({"clause", "table", "title", "front", "appendix", "stub", "paragraph"})
 DEFAULT_LAW_INVALID = "2030-12-12"
 
@@ -105,6 +108,19 @@ def _require_text(chunk: dict, what: str) -> None:
 
 def _copy(chunk: dict) -> dict:
     return copy.deepcopy(chunk)
+
+
+def detect_law_num(text: Any) -> str:
+    """从一段正文的前几行里识别「第X条」条号；识别不到返回空串。
+
+    用于拆分时自动推断下半块条号：合并过的块再拆开，下半块往往以
+    「第二条 …」开头，不该继续沿用上半块的「第一条」。
+    """
+    for line in str(text or "").split("\n")[:4]:
+        match = RE_LAW_NUM.match(line)
+        if match:
+            return re.sub(r"\s+", "", match.group(0))
+    return ""
 
 
 def _parse_span(value: Any) -> list[int] | None:
@@ -222,6 +238,7 @@ def _split(chunks: list[dict], op: dict, law_name: str, reserved=None, source_li
     # 给两块补行区间：在「原块 span」窗口内按规范化行顺序定位，
     # 这样拆分后右栏仍显示原文行号、左侧范围条也能立刻断成两段。
     # （只有服务端传入 source_lines 时才做；纯单测调用保持 span=None 的旧行为。）
+    second_span = None
     if source_lines:
         norm = [norm_line(line) for line in source_lines]
         span = original.get("span")
@@ -240,6 +257,15 @@ def _split(chunks: list[dict], op: dict, law_name: str, reserved=None, source_li
         if second_span:
             second["span"] = [second_span[0] + 1, second_span[1]]
             second["align"] = "manual"
+
+    # 下半块条号：显式填写 > 从下半块正文首行识别 > 从切点所在原文行识别 > 继承原块。
+    # 典型场景：两条合并成一块（law_num 保留第一条）后再拆开，下半块应识别出「第二条」。
+    if not second_law_num:
+        detected = detect_law_num(second_text)
+        if not detected and second_span:
+            detected = detect_law_num(source_lines[second_span[0]])
+        if detected:
+            second["law_num"] = detected
 
     return chunks[:index] + [first, second] + chunks[index + 1 :]
 

@@ -1133,6 +1133,19 @@
   // ---------- P2：人工编辑（拆 / 并 / 删 / 增 / 改 + 撤销重做） ----------
   var CHUNK_KINDS = ["clause", "table", "appendix", "paragraph", "stub", "front", "title"];
 
+  // 条号识别（与后端 ops.detect_law_num 同口径）：行首「第X条」；
+  // 拆分时用来自动推断下半块条号（例如两条合并后再拆开）。
+  var RE_LAW_NUM = /^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条/;
+
+  function detectLawNum(text) {
+    var lines = String(text || "").split("\n");
+    for (var i = 0; i < Math.min(lines.length, 4); i++) {
+      var m = RE_LAW_NUM.exec(lines[i]);
+      if (m) return m[0].replace(/\s+/g, "");
+    }
+    return "";
+  }
+
   function fillKind(select, value) {
     select.innerHTML = "";
     CHUNK_KINDS.forEach(function (kind) {
@@ -1254,7 +1267,6 @@
     el.splitTarget.textContent = chunk.id + " · " + (KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind);
     el.splitLines.innerHTML = "";
     el.splitLawNum.value = "";
-    el.splitLawNum.placeholder = "留空则与原块相同：" + (chunk.law_num || "（无）");
     if (lines.length > 1) {
       el.splitCharRow.hidden = true;
       for (var k = 1; k < lines.length; k++) {
@@ -1278,7 +1290,40 @@
       el.splitChar.value = String(mid);
       el.splitChar.max = String(Math.max(1, body.length - 1));
     }
+    updateSplitHint();
     el.splitDialog.showModal();
+  }
+
+  function updateSplitHint() {
+    var chunk = state.pendingChunk;
+    if (!chunk) return;
+    var body = String(chunk.chunk || "");
+    var lines = body.split("\n");
+    var lineSplit = lines.length > 1;
+    var k = 1;
+    var atChar = 0;
+    if (lineSplit) {
+      var checked = el.splitLines.querySelector("input[name=split-at]:checked");
+      k = checked ? parseInt(checked.value, 10) : 1;
+    } else {
+      atChar = parseInt(el.splitChar.value, 10);
+      if (!isFinite(atChar)) atChar = Math.max(1, Math.floor(body.length / 2));
+    }
+    var secondText = lineSplit ? lines.slice(k).join("\n") : body.slice(atChar);
+    var detected = detectLawNum(secondText);
+    // 正文里没带条号时，再看切点附近的原文行（合并过的块：正文行和源行不一定一一对应，往后扫几行）
+    if (!detected && chunk.span && state.doc && state.doc.lines) {
+      var base = chunk.span[0] - 1 + (lineSplit ? k : 0);
+      for (var off = 0; off <= 4; off++) {
+        var line = state.doc.lines[base + off];
+        if (!line) break;
+        var d = detectLawNum(line.text);
+        if (d) { detected = d; break; }
+      }
+    }
+    el.splitLawNum.placeholder = detected
+      ? "自动识别：" + detected + "（留空即可）"
+      : "留空则自动识别切点所在原文行的条号；识别不到继承原块：" + (chunk.law_num || "（无）");
   }
 
   function submitSplit(ev) {
@@ -1525,6 +1570,8 @@
     // 点「新增」按钮时不抢焦点/不清掉原文选区
     el.btnAdd.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
     el.splitForm.addEventListener("submit", submitSplit);
+    el.splitLines.addEventListener("change", updateSplitHint);
+    el.splitChar.addEventListener("input", updateSplitHint);
     el.editForm.addEventListener("submit", submitEdit);
     el.addForm.addEventListener("submit", submitAdd);
     Array.prototype.forEach.call(document.querySelectorAll(".btn-cancel-op"), function (btn) {

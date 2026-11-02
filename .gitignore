@@ -27,8 +27,10 @@ Thumbs.db
 desktop.ini
 
 # 前端临时测试工具
+node_modules/
 _jsdom/
 _npmcache/
 _pw/
 _edgeprof/
 _shot*.png
+_*_test*.mjs

@@ -144,6 +144,36 @@ class SplitTest(unittest.TestCase):
         out = apply_ops(base_chunks(), [{"op": "split", "id": "测试法-0001", "at_line": 1}], law_name=LAW)
         self.assertIsNone(out[1]["span"])
 
+    def test_split_auto_detects_second_law_num_from_text(self):
+        """合并过的块再拆开：下半块正文以「第二条」开头时自动识别条号。"""
+        merged = make_chunk("测试法-0001", "第一条 为了测试。\n第二条 测试结束。", law_num="第一条", span=[3, 5])
+        out = apply_ops([merged], [{"op": "split", "id": "测试法-0001", "at_line": 1}], law_name=LAW)
+        self.assertEqual(out[0]["law_num"], "第一条")
+        self.assertEqual(out[1]["law_num"], "第二条")
+
+    def test_split_auto_detects_second_law_num_from_source_line(self):
+        """正文不带条号时，用切点所在原文行（「第二条 …」）识别下半块条号。"""
+        source = ["# 测试法", "", "第一条 为了测试。", "", "第二条 测试结束。"]
+        merged = make_chunk("测试法-0001", "为了测试。\n测试结束。", law_num="第一条", span=[3, 5])
+        out = apply_ops(
+            [merged],
+            [{"op": "split", "id": "测试法-0001", "at_line": 1}],
+            law_name=LAW,
+            source_lines=source,
+        )
+        self.assertEqual(out[0]["law_num"], "第一条")
+        self.assertEqual(out[1]["law_num"], "第二条")
+        self.assertEqual(out[1]["span"], [5, 5])
+
+    def test_split_explicit_law_num_beats_auto_detect(self):
+        merged = make_chunk("测试法-0001", "第一条 为了测试。\n第二条 测试结束。", law_num="第一条", span=[3, 5])
+        out = apply_ops(
+            [merged],
+            [{"op": "split", "id": "测试法-0001", "at_line": 1, "second_law_num": "第八条"}],
+            law_name=LAW,
+        )
+        self.assertEqual(out[1]["law_num"], "第八条")
+
 
 class MergeTest(unittest.TestCase):
     def test_merge_adjacent_restores_text(self):

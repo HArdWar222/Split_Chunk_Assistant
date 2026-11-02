@@ -49,7 +49,8 @@
 - `seq` 来自 unit 的 `meta["seq"]`：statute 用条号，standard / generic 用块流水号（从 1 递增）；
 - `part_total > 1` 时才有 `-p{i}` 后缀；`chunk_kind == "table"` 的块**永不拆 part**；
 - 新增块 → `max_seq + 1`；拆分产生新 id，合并保留前者 id，撤销栈负责还原。
-- 视图层 `span`（1-based 闭区间，非 15 字段契约）：拆分时在「原块 span 窗口」内按规范化行顺序定位，两半各自补回行区间；`second_law_num` 可指定下半块条号（留空继承原块）。
+- 视图层 `span`（1-based 闭区间，非 15 字段契约）：拆分时在「原块 span 窗口」内按规范化行顺序定位，两半各自补回行区间；`second_law_num` 可指定下半块条号，留空时按下述优先级自动识别（P2 已实现）。
+- **拆分时下半块 `law_num` 的取值优先级**（`ops._split`）：① 命令里显式的 `second_law_num`；② 下半块正文前 4 行的「第X条」（`detect_law_num(second_text)`，正则 `^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条`）；③ 切点所在原文行往下 4 行内的「第X条」（`detect_law_num(source_lines[second_span[0]])`）；④ 仍找不到才继承原块条号。→ 合并多块后再拆开，下半块会自动识别出它自己的条号，而不是沿用前一块的。
 
 ### 编辑后 15 字段的对应规则（P2 已实现）
 
