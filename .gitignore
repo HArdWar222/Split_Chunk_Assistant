@@ -29,3 +29,6 @@ desktop.ini
 # 前端临时测试工具
 _jsdom/
 _npmcache/
+_pw/
+_edgeprof/
+_shot*.png

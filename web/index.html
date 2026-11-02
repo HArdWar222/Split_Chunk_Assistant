@@ -43,6 +43,9 @@
           <input type="checkbox" id="toggle-lanes" checked> 范围条
         </label>
       </header>
+      <div class="source-tip" id="source-tip">
+        在原文<b>点一下</b>会出现蓝色拆分光标（上方提示可拆行/字符）；<b>右键</b>即可在光标处拆分、拆/并/删/改/新增。
+      </div>
       <div class="source" id="source">
         <div class="empty">
           <h2>原文 ↔ 切片</h2>
@@ -176,8 +179,10 @@
   </dialog>
 
   <div id="toast" class="toast" hidden></div>
+  <div id="split-caret" class="split-caret" hidden aria-hidden="true"></div>
+  <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=0.3.2-p2b" defer></script>
 </body>
 </html>

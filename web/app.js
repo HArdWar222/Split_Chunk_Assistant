@@ -74,6 +74,8 @@
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
     toast: document.getElementById("toast"),
+    splitCaret: document.getElementById("split-caret"),
+    splitHint: document.getElementById("split-hint"),
     ctxMenu: document.getElementById("ctx-menu")
   };
 
@@ -270,6 +272,7 @@
 
   // ---------- 文档：原文 + 切片 ----------
   function loadDoc(file) {
+    hideSplitCaret();
     var seq = (loadDoc._seq = (loadDoc._seq || 0) + 1);
     setStatus("加载 " + file.law_name + " …");
     el.source.innerHTML = "<div class='empty'><p>加载原文中…</p></div>";
@@ -752,7 +755,82 @@
     var op = { op: "split", id: chunk.id };
     if (plan.kind === "line") op.at_line = plan.at_line;
     else op.at_char = plan.at_char;
-    postOp(op, (plan.kind === "line" ? "已在第 " + plan.at_line + " 行处拆分 " : "已在光标处拆分 ") + chunk.id + "（Ctrl+Z 可撤销）");
+    var index = state.doc ? state.doc.chunks.indexOf(chunk) : -1;
+    postOp(op, (plan.kind === "line" ? "已在第 " + plan.at_line + " 行处拆分 " : "已在光标处拆分 ") + chunk.id + "（Ctrl+Z 可撤销）",
+      function (doc) {
+        // 拆完选中「下半块」并滚到它，让用户立刻看到结果
+        var next = doc && doc.chunks ? doc.chunks[index + 1] : null;
+        if (next) selectChunk(next, { scrollSource: false, scrollCard: true });
+      });
+  }
+
+  // ---------- 光标反馈：点击/右键时画出蓝色拆分光标 + 位置提示 ----------
+  function clearTargetCard() {
+    if (state.targetChunk && state.cardEls[state.targetChunk]) {
+      state.cardEls[state.targetChunk].classList.remove("target");
+    }
+    state.targetChunk = null;
+  }
+
+  function hideSplitCaret() {
+    if (el.splitCaret) el.splitCaret.hidden = true;
+    if (el.splitHint) el.splitHint.hidden = true;
+    clearTargetCard();
+  }
+
+  function showSplitCaret(ev) {
+    if (!state.doc) { hideSplitCaret(); return; }
+    var pos = sourcePosition(ev);
+    if (!pos) { hideSplitCaret(); return; }
+    var rect = null;
+    try {
+      var caret = document.caretRangeFromPoint
+        ? document.caretRangeFromPoint(ev.clientX, ev.clientY)
+        : (document.caretPositionFromPoint ? document.caretPositionFromPoint(ev.clientX, ev.clientY) : null);
+      if (caret && caret.cloneRange) {
+        var r = caret.cloneRange();
+        if (r.getClientRects().length) rect = r.getBoundingClientRect();
+      } else if (caret) {
+        var r2 = document.createRange();
+        r2.setStart(caret.offsetNode, caret.offset);
+        r2.setEnd(caret.offsetNode, caret.offset);
+        if (r2.getClientRects().length) rect = r2.getBoundingClientRect();
+      }
+    } catch (e) { rect = null; }
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      var rowEl = state.lineEls[pos.line - 1];
+      if (rowEl) {
+        var rr = rowEl.getBoundingClientRect();
+        rect = { left: rr.left + 58, top: rr.top, height: rr.height };
+      }
+    }
+    if (!rect) { hideSplitCaret(); return; }
+    var chunk = chunkAtLine(pos.line);
+    var plan = chunk ? splitPlanAt(chunk, pos) : null;
+    el.splitCaret.hidden = false;
+    el.splitCaret.style.left = Math.round(rect.left - 1) + "px";
+    el.splitCaret.style.top = Math.round(rect.top) + "px";
+    el.splitCaret.style.height = Math.max(14, Math.round(rect.height)) + "px";
+    var hint;
+    if (chunk && plan) {
+      hint = "✂ 第 " + pos.line + " 行 · " + (plan.kind === "line" ? "行边界拆分" : "光标处拆分") + " · " + chunk.id;
+    } else if (chunk) {
+      hint = "✂ 第 " + pos.line + " 行 · 此位置不可拆分（块首/块尾/折叠行），可点行内文字或拖选";
+    } else {
+      hint = "第 " + pos.line + " 行 · 此处不属于任何切片";
+    }
+    el.splitHint.textContent = hint;
+    el.splitHint.hidden = false;
+    var hw = el.splitHint.offsetWidth || 240;
+    var hx = Math.min(Math.max(8, rect.left + 6), (window.innerWidth || 1280) - hw - 8);
+    var hy = Math.max(8, rect.top - (el.splitHint.offsetHeight || 22) - 6);
+    el.splitHint.style.left = Math.round(hx) + "px";
+    el.splitHint.style.top = Math.round(hy) + "px";
+    clearTargetCard();
+    if (chunk && state.cardEls[chunk.id]) {
+      state.cardEls[chunk.id].classList.add("target");
+      state.targetChunk = chunk.id;
+    }
   }
 
   function clearSelectionMarks() {
@@ -917,8 +995,18 @@
       window.setTimeout(applySelectionNow, 0);
     });
     document.addEventListener("selectionchange", scheduleSelectionCheck);
+    // 左键/右键按下时给出可见的拆分光标反馈（蓝色竖线 + 上方提示）
+    el.source.addEventListener("mousedown", function (ev) {
+      if (ev.button !== 0 && ev.button !== 2) return;
+      if (ev.target.closest(".lane")) return;
+      if (ev.target.closest(".no")) { hideSplitCaret(); return; }
+      showSplitCaret(ev);
+    });
     // 右键：在原文选区/切片上弹出上下文工作栏
-    el.source.addEventListener("contextmenu", openContextMenu);
+    el.source.addEventListener("contextmenu", function (ev) {
+      showSplitCaret(ev);
+      openContextMenu(ev);
+    });
   }
 
   // ---------- 右键上下文菜单：原文选区 ↔ 切片操作 ----------
@@ -1073,6 +1161,7 @@
 
   // 编辑后重渲染，尽量保持滚动位置与选中切片
   function applyDocPayload(doc) {
+    hideSplitCaret();
     var activeId = state.activeChunk;
     var sourceTop = el.source.scrollTop;
     var chunksTop = el.chunks.scrollTop;
@@ -1101,10 +1190,11 @@
     setStatus(msg, "err");
   }
 
-  function postOp(op, okMsg) {
+  function postOp(op, okMsg, afterFn) {
     if (!state.docKey) return;
     postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
       applyDocPayload(doc);
+      if (afterFn) afterFn(doc);
       if (okMsg) showToast(okMsg, "ok");
     }).catch(function (err) {
       opFailed(err, state.opErrEl);
@@ -1447,6 +1537,7 @@
       var key = String(ev.key || "").toLowerCase();
       if (ev.key === "Escape") {
         hideCtxMenu();
+        hideSplitCaret();
         [el.dialog, el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
           if (dlg && dlg.open) dlg.close();
         });
@@ -1484,13 +1575,14 @@
       }
     });
     bindDocEvents();
-    // 点菜单外部 / 滚动原文或切片 / 窗口尺寸变化时收起右键菜单
+    // 点菜单外部 / 滚动原文或切片 / 窗口尺寸变化时收起右键菜单与拆分光标
     document.addEventListener("click", function (ev) {
       if (!el.ctxMenu.hidden && !el.ctxMenu.contains(ev.target)) hideCtxMenu();
+      if (el.source && !el.source.contains(ev.target)) hideSplitCaret();
     });
-    el.source.addEventListener("scroll", hideCtxMenu);
-    el.chunks.addEventListener("scroll", hideCtxMenu);
-    window.addEventListener("resize", hideCtxMenu);
+    el.source.addEventListener("scroll", function () { hideCtxMenu(); hideSplitCaret(); });
+    el.chunks.addEventListener("scroll", function () { hideCtxMenu(); });
+    window.addEventListener("resize", function () { hideCtxMenu(); hideSplitCaret(); });
     window.addEventListener("hashchange", function () {
       var key = keyFromHash();
       if (key && key !== state.docKey) selectByKey(key);
