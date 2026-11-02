@@ -1157,20 +1157,24 @@
   // ---------- P2：人工编辑（拆 / 并 / 删 / 增 / 改 + 撤销重做） ----------
   var CHUNK_KINDS = ["clause", "table", "appendix", "paragraph", "stub", "front", "title"];
 
-  // 条号识别（与后端 ops.detect_law_num 同口径）：行首「第X条」；
-  // 拆分时用来自动推断下半块条号（例如两条合并后再拆开）。
+  // 条号识别（与后端 ops.detect_law_num 同口径）：
+  // - 法规式「第X条」；- 标准式「5.4.1」（至少一个层级点，避免误吞正文里的普通数字）。
   var RE_LAW_NUM = /^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条/;
+  var RE_CLAUSE_NUM = /^\s*(?:[#>*\-+]\s*)*(\d{1,2}(?:\.\d{1,4}){1,5})(?=\s|\u3000|$|[^\d.])/;
+  var RE_ANCHOR = /^(?:第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条|\d{1,2}(?:\.\d{1,4}){1,5}|\d{1,2})$/;
 
   function detectLawNum(text) {
     var lines = String(text || "").split("\n");
     for (var i = 0; i < Math.min(lines.length, 4); i++) {
       var m = RE_LAW_NUM.exec(lines[i]);
       if (m) return m[0].replace(/\s+/g, "");
+      m = RE_CLAUSE_NUM.exec(lines[i]);
+      if (m) return m[1];
     }
     return "";
   }
 
-  // 从原文行倒推：这块 span 覆盖了哪些「第X条」（仅 UI 提示，如合并块覆盖多条，不改 15 字段）
+  // 从原文行倒推：这块 span 覆盖了哪些条号（仅 UI 提示，如合并块覆盖多条，不改 15 字段）
   function coveredLawNums(chunk) {
     if (!chunk || !chunk.span || !state.doc || !state.doc.lines) return [];
     var nums = [];
@@ -1180,8 +1184,12 @@
       var line = state.doc.lines[n - 1];
       if (!line) continue;
       var m = RE_LAW_NUM.exec(line.text || "");
-      if (!m) continue;
-      var txt = m[0].replace(/\s+/g, "");
+      var txt = m ? m[0].replace(/\s+/g, "") : "";
+      if (!txt) {
+        m = RE_CLAUSE_NUM.exec(line.text || "");
+        if (m) txt = m[1];
+      }
+      if (!txt) continue;
       if (nums[nums.length - 1] !== txt) nums.push(txt);
     }
     return nums;
@@ -1191,7 +1199,10 @@
   function clauseAnchorOf(chunk) {
     var value = String((chunk && chunk.law_num) || "").trim();
     if (!value || value === "（新增）") return "";
-    return RE_LAW_NUM.test(value) ? value.replace(/\s+/g, "") : "";
+    var compact = value.replace(/\s+/g, "");
+    if (!RE_ANCHOR.test(compact)) return "";
+    if (compact.indexOf("表") >= 0 || compact.indexOf("附录") >= 0) return "";
+    return compact;
   }
 
   function inferAddLawNum() {

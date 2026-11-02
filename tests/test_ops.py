@@ -11,6 +11,7 @@ from chunk_studio.ops import (
     apply_ops,
     chunk_diff,
     chunk_hash,
+    detect_law_num,
     estimate_token_len,
     max_seq,
     next_id,
@@ -363,6 +364,35 @@ class DropAddPatchTest(unittest.TestCase):
             apply_ops(base_chunks(), [{"op": "patch", "id": "测试法-0002", "chunk_kind": "bad"}], law_name=LAW)
         with self.assertRaises(OpError):
             apply_ops(base_chunks(), [{"op": "patch", "id": "测试法-0002", "chunk": "  "}], law_name=LAW)
+
+
+class StandardClauseNumTest(unittest.TestCase):
+    """标准式条号（5.4.1）的识别与倒推。"""
+
+    def test_detect_standard_clause(self):
+        self.assertEqual(detect_law_num("5.4.2 作业场所应设置氨的安全警示标志"), "5.4.2")
+        self.assertEqual(detect_law_num("## 5.4 安全警示标识"), "5.4")
+        self.assertEqual(detect_law_num("2019年发布"), "")        # 纯数字不带点，不误吞
+        self.assertEqual(detect_law_num("表A.1 安全标志"), "")     # 表号不作条号
+
+    def test_split_merged_standard_clause(self):
+        merged = make_chunk(
+            "标准-0001",
+            "5.4.1 现场应在醒目位置高低搭配设置风向标。\n5.4.2 作业场所应设置氨的安全警示标志。",
+            law_num="5.4.1",
+            span=[356, 358],
+        )
+        out = apply_ops([merged], [{"op": "split", "id": "标准-0001", "at_line": 1}], law_name="标准")
+        self.assertEqual(out[0]["law_num"], "5.4.1")
+        self.assertEqual(out[1]["law_num"], "5.4.2")
+
+    def test_add_after_standard_clause(self):
+        first = make_chunk("标准-0001", "5.4.1 现场设置风向标。", law_num="5.4.1", span=[356, 356])
+        table = make_chunk("标准-0002", "表A.1 安全标志", law_num="表A.1", kind="table", span=[357, 357])
+        out = apply_ops(
+            [first, table], [{"op": "add", "text": "补充说明", "after_id": "标准-0002"}], law_name="标准"
+        )
+        self.assertEqual(out[-1]["law_num"], "5.4.1")  # 跳过表号，取最近的「5.4.1」
 
 
 class ApplyAndDiffTest(unittest.TestCase):

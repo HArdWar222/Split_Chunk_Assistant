@@ -36,6 +36,12 @@ RE_ID = re.compile(r"^.+-(\d{4,})(?:-p(\d+))?$")
 #: 条号识别：行首（允许列表符 / 加粗 / 标题记号 / 全角空格）的「第X条」
 RE_LAW_NUM = re.compile(r"^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条")
 
+#: 标准式条号识别：行首的「5.4.1」这类数字层级号（至少带一个小数点，避免误吞正文里的普通数字）
+RE_CLAUSE_NUM = re.compile(r"^\s*(?:[#>*\-+]\s*)*(\d{1,2}(?:\.\d{1,4}){1,5})(?=\s|\u3000|$|[^\d.])")
+
+#: law_num 本身是否可作为倒推锚点（第X条 / 5.4.1 / 1）
+RE_ANCHOR = re.compile(r"^(?:第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条|\d{1,2}(?:\.\d{1,4}){1,5}|\d{1,2})$")
+
 CHUNK_KINDS = frozenset({"clause", "table", "title", "front", "appendix", "stub", "paragraph"})
 DEFAULT_LAW_INVALID = "2030-12-12"
 
@@ -112,15 +118,22 @@ def _copy(chunk: dict) -> dict:
 
 
 def detect_law_num(text: Any) -> str:
-    """从一段正文的前几行里识别「第X条」条号；识别不到返回空串。
+    """从一段正文的前几行里识别条号；识别不到返回空串。
+
+    两种样式都认：
+    - 法规式「第二条 …」；
+    - 标准式「5.4.1 现场应…」（至少一个层级点，避免把正文里的「2019年」之类当条号）。
 
     用于拆分时自动推断下半块条号：合并过的块再拆开，下半块往往以
-    「第二条 …」开头，不该继续沿用上半块的「第一条」。
+    「第二条 …」或「5.4.2 …」开头，不该继续沿用上半块的条号。
     """
     for line in str(text or "").split("\n")[:4]:
         match = RE_LAW_NUM.match(line)
         if match:
             return re.sub(r"\s+", "", match.group(0))
+        match = RE_CLAUSE_NUM.match(line)
+        if match:
+            return match.group(1)
     return ""
 
 
@@ -353,11 +366,17 @@ def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lin
 
 
 def _clause_anchor(chunk: dict) -> str:
-    """取一块可作为条号参照的 law_num：只认「第X条」，占位（新增）不算。"""
+    """取一块可作为条号参照的 law_num（「第X条」或「5.4.1」）；占位/表号/附录号不算。"""
     candidate = str(chunk.get("law_num") or "").strip()
     if not candidate or candidate == NEW_LAW_NUM:
         return ""
-    return re.sub(r"\s+", "", candidate) if RE_LAW_NUM.match(candidate) else ""
+    compact = re.sub(r"\s+", "", candidate)
+    if not RE_ANCHOR.match(compact):
+        return ""
+    # 「A.1 表D.1 第1-2行」这类含表号/附录号的复合值不作参照（A.1 开头已被排除，这里防御性检查）
+    if "表" in compact or "附录" in compact:
+        return ""
+    return compact
 
 
 def infer_law_num(chunks: list[dict], index: int) -> str:
