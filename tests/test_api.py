@@ -208,6 +208,21 @@ class AppTest(unittest.TestCase):
         self.assertTrue(patched["manual"])
         self.assertEqual(patched["align"], "manual")
 
+    def test_op_add_with_span(self):
+        # 原文选区新增：带行区间
+        status, data = self.apply_op({"op": "add", "text": "选中新增块", "span": [3, 4]})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 3)
+        new = data["chunks"][-1]
+        self.assertEqual(new["span"], [3, 4])
+        self.assertTrue(new["manual"])
+        self.assertEqual(data["diff"]["added"], 1)
+
+    def test_op_add_bad_span(self):
+        status, data = self.apply_op({"op": "add", "text": "x", "span": [4, 2]})
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+
     def test_op_add_and_drop(self):
         status, data = self.apply_op({"op": "add", "text": "新增块正文", "chunk_kind": "paragraph"})
         self.assertEqual(status, 200)

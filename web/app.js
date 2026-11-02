@@ -19,7 +19,8 @@
     selHits: [],       // 当前选区命中的 chunk id
     selRange: null,    // 当前选区行范围 {start, end}（1-based 闭区间）
     pendingChunk: null,// 当前弹层操作的切片
-    addAfterId: null   // 新增切片的插入位置（null = 末尾）
+    addAfterId: null,  // 新增切片的插入位置（null = 末尾）
+    addSpan: null      // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
   };
 
   var el = {
@@ -58,6 +59,7 @@
     editKind: document.getElementById("edit-kind"),
     editErrors: document.getElementById("edit-errors"),
     addDialog: document.getElementById("add-dialog"),
+    addHint: document.getElementById("add-hint"),
     addForm: document.getElementById("add-form"),
     addText: document.getElementById("add-text"),
     addLawNum: document.getElementById("add-law-num"),
@@ -586,6 +588,52 @@
     return { start: a, end: b };
   }
 
+  // 选区内部：把一个 DOM 位置换算成「该行正文里的字符偏移」
+  function lineCharOffset(row, node, offset) {
+    if (!row) return 0;
+    var txt = row.querySelector(".txt");
+    if (!txt) return 0;
+    if (!node || !txt.contains(node)) return 0;
+    var base = 0;
+    var walker = document.createTreeWalker(txt, NodeFilter.SHOW_TEXT);
+    var current;
+    while ((current = walker.nextNode())) {
+      if (current === node) return base + Math.min(offset, current.textContent.length);
+      base += current.textContent.length;
+    }
+    return base;
+  }
+
+  // 选区 → { start, end, text }：行范围 + 按源行重建的纯文本（不含行号/泳道）
+  function selectedText() {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !state.doc) return null;
+    var range = sel.getRangeAt(0);
+    if (!range || !el.source.contains(range.startContainer) || !el.source.contains(range.endContainer)) {
+      return null;
+    }
+    var p1 = { line: lineOfNode(range.startContainer), node: range.startContainer, offset: range.startOffset };
+    var p2 = { line: lineOfNode(range.endContainer), node: range.endContainer, offset: range.endOffset };
+    if (!p1.line || !p2.line) return null;
+    if (p1.line > p2.line) { var tmp = p1; p1 = p2; p2 = tmp; }
+    var a = p1.line;
+    var b = p2.line;
+    var startOff = lineCharOffset(state.lineEls[a - 1], p1.node, p1.offset);
+    var endOff = lineCharOffset(state.lineEls[b - 1], p2.node, p2.offset);
+    if (a === b && startOff > endOff) { var swap = startOff; startOff = endOff; endOff = swap; }
+    var lines = state.doc.lines || [];
+    var parts = [];
+    if (a === b) {
+      parts.push((lines[a - 1].text || "").slice(startOff, endOff));
+    } else {
+      parts.push((lines[a - 1].text || "").slice(startOff));
+      for (var n = a + 1; n < b; n++) parts.push(lines[n - 1].text || "");
+      parts.push((lines[b - 1].text || "").slice(0, endOff));
+    }
+    var text = parts.join("\n");
+    return { start: a, end: b, text: text };
+  }
+
   function chunksInLineRange(start, end) {
     var doc = state.doc;
     if (!doc) return [];
@@ -977,10 +1025,29 @@
     state.opErrEl = el.addErrors;
     el.addErrors.hidden = true;
     el.addErrors.textContent = "";
-    el.addText.value = "";
+
+    // 如果原文里有选区：把选区文本带进弹层，并记下行区间（新增块可定位回原文）
+    var picked = selectedText();
+    if (picked && picked.text.trim()) {
+      state.addSpan = [picked.start, picked.end];
+      el.addText.value = picked.text;
+      var hits = chunksInLineRange(picked.start, picked.end);
+      state.addAfterId = hits.length ? hits[hits.length - 1].id : (state.activeChunk || null);
+      var rangeLabel = picked.start === picked.end
+        ? "第 " + picked.start + " 行"
+        : "第 " + picked.start + "–" + picked.end + " 行";
+      el.addHint.textContent = "已带入原文" + rangeLabel + "的选区（" + picked.text.length +
+        " 字），新增块会定位到这几行；可继续编辑正文。";
+      el.addHint.hidden = false;
+    } else {
+      state.addSpan = null;
+      el.addText.value = "";
+      state.addAfterId = state.activeChunk || null;
+      el.addHint.textContent = "先在中间原文里拖选一段文字，点「新增」可直接把选区变成切片；也可以直接输入正文手动新增。";
+      el.addHint.hidden = false;
+    }
     el.addLawNum.value = "";
     fillKind(el.addKind, "paragraph");
-    state.addAfterId = state.activeChunk || null;
     el.addDialog.showModal();
   }
 
@@ -995,10 +1062,13 @@
       chunk_kind: el.addKind.value
     };
     if (state.addAfterId) op.after_id = state.addAfterId;
+    if (state.addSpan) op.span = [state.addSpan[0], state.addSpan[1]];
     postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
       el.addDialog.close();
+      var hadSpan = !!op.span;
+      state.addSpan = null;
       applyDocPayload(doc);
-      showToast("已新增一块", "ok");
+      showToast(hadSpan ? "已按原文选区新增一块" : "已新增一块", "ok");
     }).catch(function (err) {
       opFailed(err, el.addErrors);
     });
@@ -1125,6 +1195,8 @@
     el.btnRedo.addEventListener("click", doRedo);
     el.btnReset.addEventListener("click", doReset);
     el.btnAdd.addEventListener("click", openAdd);
+    // 点「新增」按钮时不抢焦点/不清掉原文选区
+    el.btnAdd.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
     el.splitForm.addEventListener("submit", submitSplit);
     el.editForm.addEventListener("submit", submitEdit);
     el.addForm.addEventListener("submit", submitAdd);

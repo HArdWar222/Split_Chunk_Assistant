@@ -153,7 +153,8 @@
   <dialog id="add-dialog" class="dialog op-dialog">
     <form method="dialog" id="add-form">
       <h2>＋ 新增切片</h2>
-      <p class="hint">插入到当前选中切片之后（未选中则追加到末尾），id = 当前最大 seq+1。</p>
+      <p class="hint">在原文里拖选一段文字后点「新增」，选区会直接变成切片并记录行区间；未选区时手动输入正文，插入到当前选中切片之后（未选中则追加末尾），id = 当前最大 seq+1。</p>
+      <p class="op-hint" id="add-hint" hidden></p>
       <label class="field">
         <span>正文 <code>chunk</code></span>
         <textarea id="add-text" rows="8" spellcheck="false" placeholder="粘贴或输入要新增的块正文…"></textarea>

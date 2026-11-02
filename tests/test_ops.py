@@ -169,6 +169,25 @@ class DropAddPatchTest(unittest.TestCase):
         with self.assertRaises(OpError):
             apply_ops(base_chunks(), [{"op": "add", "text": "x", "chunk_kind": "nope"}], law_name=LAW)
 
+    def test_add_with_span(self):
+        # 原文选区新增：带行区间，可定位回原文
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "add", "text": "从原文选中新增", "span": [7, 9], "after_id": "测试法-0002"}],
+            law_name=LAW,
+        )
+        new = out[2]
+        self.assertEqual(new["chunk"], "从原文选中新增")
+        self.assertEqual(new["span"], [7, 9])
+        self.assertTrue(new["manual"])
+        self.assertEqual(new["align"], "manual")
+        self.assertEqual(new["law_num"], "（新增）")
+
+    def test_add_span_errors(self):
+        for bad in ([3], ["a", "b"], [0, 2], [5, 4], "3-4"):
+            with self.assertRaises(OpError):
+                apply_ops(base_chunks(), [{"op": "add", "text": "x", "span": bad}], law_name=LAW)
+
     def test_patch(self):
         out = apply_ops(
             base_chunks(),

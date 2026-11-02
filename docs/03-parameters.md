@@ -31,7 +31,7 @@
 | 拆分 split（字符级） | `line` + `char_index` | 行内 inline span 切点，按字符切两块 |
 | 合并 merge | `merge_prev` / `merge_next`（可链式多选） | 相邻块合并，part 自动规范化 |
 | 删除 drop | — | 从结果移除（源文不动），可撤销 |
-| 新增 add | 插入位置（块后 / 文档末尾）+ 源行区间 | 新块 id = 当前最大 seq + 1 |
+| 新增 add | 插入位置（块后 / 文档末尾）+ 源行区间 | 新块 id = 当前最大 seq + 1；带 `span:[起始行,结束行]` 时表示来自原文选区（P2 已实现，界面即「拖选原文 → ＋新增」），不带则 `span=None` |
 | 重划区间（高级） | 直接输入 `start` / `end` | 适用于 miss 块手工定位 |
 
 边界操作自动维护：`id`、`part_index/part_total`、`chunk_hash`、`token_len`、`span`、`manual` 标记、diff 计数。

@@ -590,6 +590,16 @@ body.no-lanes .line .lanes { display: none; }
   word-break: break-all;
 }
 
+.op-hint {
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: #eef6ff;
+  border: 1px solid #cfe3ff;
+  color: #1d4ed8;
+  font-size: 12.5px;
+}
+
 .split-lines {
   display: grid;
   gap: 4px;

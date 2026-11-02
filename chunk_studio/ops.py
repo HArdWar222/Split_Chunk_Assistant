@@ -105,6 +105,24 @@ def _copy(chunk: dict) -> dict:
     return copy.deepcopy(chunk)
 
 
+def _parse_span(value: Any) -> list[int] | None:
+    """解析可选的行区间 span（1-based 闭区间），非法时抛 OpError。"""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise OpError("span 必须是 [起始行, 结束行] 两个整数")
+    try:
+        start = int(value[0])
+        end = int(value[1])
+    except (TypeError, ValueError):
+        raise OpError("span 的行号不是整数") from None
+    if start < 1 or end < 1:
+        raise OpError("span 的行号必须从 1 开始")
+    if start > end:
+        raise OpError(f"span 起始行 {start} 大于结束行 {end}")
+    return [start, end]
+
+
 # ---------------------------------------------------------------------------
 # 基础查询
 # ---------------------------------------------------------------------------
@@ -247,6 +265,9 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dic
         raise OpError(f"chunk_kind 非法：{kind!r}（可选 {sorted(CHUNK_KINDS)}）")
     law_num = str(op.get("law_num") or "").strip() or NEW_LAW_NUM
 
+    # 可选：来自原文选区时带上行区间（1-based 闭区间），新增块因此可定位回原文
+    span = _parse_span(op.get("span"))
+
     template = chunks[0] if chunks else {}
     new: dict = {
         "id": next_id(chunks, law_name, reserved),
@@ -265,7 +286,7 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dic
         "part_total": 1,
         "chunk_hash": "",
         "extras": {"region": "body"},
-        "span": None,
+        "span": span,
         "align": "manual",
         "manual": True,
     }
