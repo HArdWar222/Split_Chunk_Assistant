@@ -7,6 +7,8 @@ __pycache__/
 venv/
 
 # 运行时产物
+config.json
+config.json.tmp
 edits/
 exports/
 cache/
@@ -15,6 +17,9 @@ cache/
 # 本地历史资料（不随仓库发布）
 reference/
 scratch/
+
+# 测试临时目录
+tests/_tmp/
 
 # 系统
 .DS_Store

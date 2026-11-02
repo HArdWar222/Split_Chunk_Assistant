@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SplitChunkAssistant · P0</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">SC</span>
+      <h1>SplitChunkAssistant</h1>
+      <span class="phase" id="phase">P0</span>
+    </div>
+    <div class="status" id="status">加载中…</div>
+    <div class="actions">
+      <button id="btn-refresh" type="button" class="btn">刷新</button>
+      <button id="btn-settings" type="button" class="btn">⚙ 设置</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="search-row">
+        <input id="search" type="search" placeholder="搜索法规名 / 分组…" autocomplete="off" aria-label="搜索法规">
+      </div>
+      <div class="stats" id="stats"></div>
+      <nav class="tree" id="tree" aria-label="文件列表"></nav>
+    </aside>
+
+    <section class="detail" id="detail">
+      <div class="empty">
+        <h2>选择左侧一份法规</h2>
+        <p>P0 只提供文件清单与配置。<b>P1</b> 会在这里并排显示原文与切片。</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="settings-dialog" class="dialog">
+    <form method="dialog" id="settings-form">
+      <h2>⚙ 设置</h2>
+      <p class="hint">修改后保存立即生效（无需重启）。切块产物目录必须包含 <code>_manifest.json</code>。</p>
+
+      <label class="field">
+        <span>切块产物目录 <code>chunks_dir</code></span>
+        <input id="cfg-chunks-dir" type="text" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>FAC-RAG 根目录 <code>fac_root</code>（用于推导默认产物目录）</span>
+        <input id="cfg-fac-root" type="text" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>端口 <code>port</code>（重启后生效）</span>
+        <input id="cfg-port" type="number" min="1" max="65535">
+      </label>
+
+      <div class="field">
+        <span>源文件根目录 <code>source_roots</code>（按分组，留空自动从 manifest 推导）</span>
+        <div id="cfg-source-roots" class="source-roots"></div>
+      </div>
+
+      <div class="dialog-errors" id="cfg-errors" hidden></div>
+
+      <div class="dialog-actions">
+        <button type="button" id="btn-cancel" class="btn">取消</button>
+        <button type="submit" id="btn-save" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

@@ -6,8 +6,8 @@
 原文（Markdown）与切片（chunk）双向联动，支持人工 `split / merge / drop / add / 改字`，
 支持调整切分参数后重切，人工修改写入覆盖层，导出仍然是原来的 **15 字段契约**。
 
-**当前状态：设计定稿，代码未开工**（2026-11-03）。本仓库当前只含设计与调研资料；
-代码将在 P0 启动后进入 `chunk_studio/`（见 [docs/06-roadmap.md](docs/06-roadmap.md)）。
+**当前状态：P0 已实现（2026-11-03）** —— 只读文件清单工作台可用：97 个文件 / 12 718 块分组展示、
+搜索、文件元信息、可配置数据源（路径改完立即生效）。P1 起进入「原文 ↔ 切片」三栏联动（见 [docs/06-roadmap.md](docs/06-roadmap.md)）。
 
 ---
 
@@ -76,19 +76,44 @@ SplitChunkAssistant 把「自动切块」变成「可人工复核与修正的切
 
 ---
 
-## 快速开始（P0 之后可用）
+## 快速开始（P0 可用）
 
 ```bat
-:: 前提：本机已装 Python 3.11+，且 FAC-RAG 位于本仓库的兄弟目录
+:: 前提：本机已装 Python 3.10+，且 FAC-RAG 位于本仓库的兄弟目录
+:: 方式一：双击 / 命令行
+run_studio.cmd
+
+:: 方式二：直接跑模块
 set FAC_ROOT=C:\Users\QiuYe\Desktop\FAC-RAG
 python -m chunk_studio.server --port 8790 --open
 ```
 
-浏览器打开 http://127.0.0.1:8790 ，左侧点开任意文件即可。
+浏览器打开 http://127.0.0.1:8790 ：左侧是按分组排好的 97 个法规文件（点击看元信息），
+右上角「⚙ 设置」可改 `chunks_dir` / `fac_root` / 端口 / 各分组源目录，保存即生效。
 
-实现前的占位说明：当前 `chunk_studio/` 尚未创建；现有 `prototype/core_prototype.py`
-是数据层草稿（已验证可复现产物、可对齐原文），P0 会按新架构重写拆分为
-`fac_bridge / manifest / source / align / ops / overlay / studio / api / server`。
+首次运行会在仓库根目录生成 `config.json`（已 gitignore）：
+
+```json
+{
+  "fac_root": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG",
+  "chunks_dir": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG\\data\\chunks_v2",
+  "source_roots": {},
+  "port": 8790
+}
+```
+
+P0 的验收口径（单测覆盖）：
+
+```bat
+python -m unittest discover -s tests -t . -v   :: 42 个测试
+```
+
+- `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60
+- `/api/doc` 返回 501（P1 才提供联动，不假装有）
+- 静态页 `/`、`/static/app.js`、`/static/style.css` 均可直出
+
+P0 只消费 FAC-RAG **已切好的 JSON**（`_manifest.json` + `*.jsonl` + `_extras.jsonl`），
+不 import `fac_rag`、不调用切块器；参数重切（P4）才会新增裸调用入口。
 
 ---
 
@@ -97,8 +122,12 @@ python -m chunk_studio.server --port 8790 --open
 ```
 Split_assistant/
 ├── README.md                 ← 本文件
+├── run_studio.cmd            ← Windows 一键启动（P0）
+├── chunk_studio/             ← 后端包（纯 stdlib：config/manifest/fac_bridge/studio/api/server）
+├── web/                      ← 前端单页（index.html / app.js / style.css）
+├── tests/                    ← 单测（配置 / manifest / 产物桥 / API / 真实语料）
 ├── docs/                     ← 设计文档（8 篇）
-├── prototype/                ← 数据层草稿（不作为最终架构）
+├── prototype/                ← 数据层草稿（P0 起被 chunk_studio 取代）
 ├── reference/                ← 历史资料：chunking_v2 快照与代码审查（不随仓库发布）
 └── scratch/                  ← 一次性探针脚本（不随仓库发布）
 ```
