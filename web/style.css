@@ -287,6 +287,7 @@ body {
 
 .line.hl { background: #e6efff; box-shadow: inset 3px 0 0 var(--accent); }
 .line.hl-soft { background: #eef4ff; }
+.line.sel { background: #fff7e0; box-shadow: inset 3px 0 0 #f59e0b; }
 
 /* 切片卡片 */
 .chunks { font-size: 13px; }
@@ -303,6 +304,7 @@ body {
 
 .chunk-card:hover { border-color: #9dbcf5; }
 .chunk-card.related { border-color: #93b4f5; box-shadow: 0 0 0 2px #e3ecff; }
+.chunk-card.hit { border-color: #f59e0b; box-shadow: 0 0 0 2px #fde68a; }
 .chunk-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
 
 .chunk-card.align-miss { border-style: dashed; }

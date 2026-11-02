@@ -15,7 +15,9 @@
     lineChunks: null,  // 行号(1-based) -> [chunk, ...]
     cardEls: {},       // chunk id -> 卡片元素
     hlEls: [],         // 当前高亮的源行元素
-    hoverLine: null    // 当前悬停的源行号
+    hoverLine: null,   // 当前悬停的源行号
+    selHits: [],       // 当前选区命中的 chunk id
+    selRange: null     // 当前选区行范围 {start, end}（1-based 闭区间）
   };
 
   var el = {
@@ -267,6 +269,8 @@
   }
 
   function renderDocument(doc) {
+    state.selHits = [];
+    state.selRange = null;
     renderSource(doc);
     renderChunks(doc);
     renderDocMeta(doc);
@@ -436,6 +440,98 @@
     if (state.cardEls) state.cardEls._related = [];
   }
 
+  // ---------- 原文选区 → 切片映射 ----------
+  function lineOfNode(node) {
+    if (!node) return 0;
+    var elNode = node.nodeType === 1 ? node : node.parentElement;
+    if (!elNode || !elNode.closest) return 0;
+    var row = elNode.closest(".line");
+    if (!row || !row.dataset.line) return 0;
+    var n = parseInt(row.dataset.line, 10);
+    return isFinite(n) ? n : 0;
+  }
+
+  function selectedLineRange() {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    var range = sel.getRangeAt(0);
+    if (!range || !el.source.contains(range.startContainer) || !el.source.contains(range.endContainer)) {
+      return null;
+    }
+    var a = lineOfNode(range.startContainer);
+    var b = lineOfNode(range.endContainer);
+    if (!a || !b) return null;
+    if (a > b) { var t = a; a = b; b = t; }
+    return { start: a, end: b };
+  }
+
+  function chunksInLineRange(start, end) {
+    var doc = state.doc;
+    if (!doc) return [];
+    var hits = [];
+    doc.chunks.forEach(function (chunk) {
+      if (!chunk.span) return;
+      if (chunk.span[1] >= start && chunk.span[0] <= end) hits.push(chunk);
+    });
+    return hits;
+  }
+
+  function clearSelectionMarks() {
+    (state.selHits || []).forEach(function (id) {
+      if (state.cardEls[id]) state.cardEls[id].classList.remove("hit");
+    });
+    if (state.selRange) {
+      for (var n = state.selRange.start; n <= state.selRange.end; n++) {
+        var row = state.lineEls[n - 1];
+        if (row) row.classList.remove("sel");
+      }
+    }
+    state.selHits = [];
+    state.selRange = null;
+  }
+
+  function applySelectionNow() {
+    var range = selectedLineRange();
+    var hadMarks = (state.selHits && state.selHits.length) || state.selRange;
+    clearSelectionMarks();
+    if (!range) {
+      if (hadMarks) setStatus("就绪 · 点击左侧文件查看原文与切片", "ok");
+      return;
+    }
+    var hits = chunksInLineRange(range.start, range.end);
+    state.selRange = range;
+    state.selHits = hits.map(function (c) { return c.id; });
+    for (var n = range.start; n <= range.end; n++) {
+      var row = state.lineEls[n - 1];
+      if (row) row.classList.add("sel");
+    }
+    hits.forEach(function (chunk) {
+      if (state.cardEls[chunk.id]) state.cardEls[chunk.id].classList.add("hit");
+    });
+    if (!hits.length) {
+      setStatus("原文第 " + range.start + "–" + range.end + " 行：没有对应的切片（该范围可能是未对齐块）", "warn");
+      return;
+    }
+    var rangeText = range.start === range.end
+      ? "第 " + range.start + " 行"
+      : "第 " + range.start + "–" + range.end + " 行";
+    setStatus("原文" + rangeText + " → 对应 " + hits.length + " 个切片（右侧已高亮）", "ok");
+    // 若命中的卡片都不在可视区，滚到第一个
+    var anyVisible = hits.some(function (chunk) {
+      var card = state.cardEls[chunk.id];
+      if (!card) return false;
+      var top = card.offsetTop;
+      return top + card.offsetHeight > el.chunks.scrollTop &&
+        top < el.chunks.scrollTop + el.chunks.clientHeight;
+    });
+    if (!anyVisible) scrollToCard(hits[0].id);
+  }
+
+  function scheduleSelectionCheck() {
+    window.clearTimeout(scheduleSelectionCheck._t);
+    scheduleSelectionCheck._t = window.setTimeout(applySelectionNow, 120);
+  }
+
   function scrollToLine(n) {
     var row = state.lineEls[n - 1];
     if (!row) return;
@@ -529,6 +625,11 @@
         selectChunk(related[0], { scrollSource: false, scrollCard: true });
       }
     });
+    // 拖选原文文字：选区覆盖的行 → 高亮对应切片
+    el.source.addEventListener("mouseup", function () {
+      window.setTimeout(applySelectionNow, 0);
+    });
+    document.addEventListener("selectionchange", scheduleSelectionCheck);
   }
 
   // ---------- 设置 ----------
