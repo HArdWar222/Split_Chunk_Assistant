@@ -352,12 +352,46 @@ def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lin
     return chunks[:index] + chunks[index + 1 :]
 
 
+def _clause_anchor(chunk: dict) -> str:
+    """取一块可作为条号参照的 law_num：只认「第X条」，占位（新增）不算。"""
+    candidate = str(chunk.get("law_num") or "").strip()
+    if not candidate or candidate == NEW_LAW_NUM:
+        return ""
+    return re.sub(r"\s+", "", candidate) if RE_LAW_NUM.match(candidate) else ""
+
+
+def infer_law_num(chunks: list[dict], index: int) -> str:
+    """按前后邻居倒推插在第 ``index`` 个位置的新块条号（无绝对把握时返回空串）。
+
+    规则（保守）：
+    1. 先看**前一块**（同一块的续写，插在它后面默认仍属于它的条号）；
+    2. 前面没有参照时看**后一块**（插在开头，通常属于下一块所在的条）；
+    3. 参照只认「第X条」，表号 / 附录号 / （新增）都不拿来推断。
+    """
+    for j in range(min(index, len(chunks) - 1), -1, -1):
+        anchor = _clause_anchor(chunks[j])
+        if anchor:
+            return anchor
+    for j in range(max(0, index + 1), len(chunks)):
+        anchor = _clause_anchor(chunks[j])
+        if anchor:
+            return anchor
+    return ""
+
+
 def _add(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     text = str(op.get("text") or "")
     kind = str(op.get("chunk_kind") or "paragraph").strip() or "paragraph"
     if kind not in CHUNK_KINDS:
         raise OpError(f"chunk_kind 非法：{kind!r}（可选 {sorted(CHUNK_KINDS)}）")
-    law_num = str(op.get("law_num") or "").strip() or NEW_LAW_NUM
+
+    # 插入位置：after_id 之后；不传则追加到末尾（用最后一块作条号参照）
+    after_id = op.get("after_id")
+    insert_at = len(chunks) if after_id is None else find_index(chunks, after_id) + 1
+
+    law_num = str(op.get("law_num") or "").strip()
+    if not law_num:
+        law_num = infer_law_num(chunks, insert_at - 1) or NEW_LAW_NUM
 
     # 可选：来自原文选区时带上行区间（1-based 闭区间），新增块因此可定位回原文
     span = _parse_span(op.get("span"))
@@ -387,11 +421,7 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None, source_line
     _derive(new, text=text)
     _require_text(new, "新增")
 
-    after_id = op.get("after_id")
-    if after_id is None:
-        return chunks + [new]
-    index = find_index(chunks, after_id)
-    return chunks[: index + 1] + [new] + chunks[index + 1 :]
+    return chunks[:insert_at] + [new] + chunks[insert_at:]
 
 
 def _patch(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:

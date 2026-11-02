@@ -229,7 +229,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(len(data["chunks"]), 3)
         new = data["chunks"][-1]
         self.assertEqual(new["id"], "测试法-0003")
-        self.assertEqual(new["law_num"], "（新增）")
+        self.assertEqual(new["law_num"], "第二条")  # 追加在末尾 → 沿用最近的「第X条」
         status, data = self.apply_op({"op": "drop", "id": "测试法-0001"})
         self.assertEqual(status, 200)
         self.assertEqual(len(data["chunks"]), 2)
@@ -248,6 +248,12 @@ class AppTest(unittest.TestCase):
         # 少于 2 个 id → 400
         status, data = self.apply_op({"op": "merge_many", "ids": ["测试法-0001"]})
         self.assertEqual(status, 400)
+
+    def test_op_add_infers_law_num(self):
+        # 不填 law_num 时按前一块倒推：插在「第二条」后面 → 第二条
+        status, data = self.apply_op({"op": "add", "text": "续写", "after_id": "测试法-0002"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["chunks"][2]["law_num"], "第二条")
 
     def test_undo_redo(self):
         self.apply_op({"op": "split", "id": "测试法-0001", "at_char": 4})

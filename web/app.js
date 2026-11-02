@@ -438,6 +438,12 @@
       badges.push("<span class='badge badge-kind kind-" + escapeHtml(chunk.chunk_kind) + "'>" +
         escapeHtml(KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind) + "</span>");
       if (chunk.law_num) badges.push("<span class='badge badge-num'>" + escapeHtml(chunk.law_num) + "</span>");
+      // 合并/大块：从原文行倒推这块实际覆盖的条号范围（视图层提示，不改 15 字段契约）
+      var cover = coveredLawNums(chunk);
+      if (cover.length >= 2) {
+        badges.push("<span class='badge badge-cover' title='覆盖：" + escapeHtml(cover.join(" / ")) + "'>覆盖 " +
+          escapeHtml(cover[0]) + "–" + escapeHtml(cover[cover.length - 1]) + "（" + cover.length + " 条）</span>");
+      }
       if (chunk.part_total > 1) {
         badges.push("<span class='badge badge-part'>part " + chunk.part_index + "/" + chunk.part_total + "</span>");
       }
@@ -1164,6 +1170,50 @@
     return "";
   }
 
+  // 从原文行倒推：这块 span 覆盖了哪些「第X条」（仅 UI 提示，如合并块覆盖多条，不改 15 字段）
+  function coveredLawNums(chunk) {
+    if (!chunk || !chunk.span || !state.doc || !state.doc.lines) return [];
+    var nums = [];
+    var start = Math.max(1, chunk.span[0]);
+    var end = Math.min(state.doc.lines.length, chunk.span[1]);
+    for (var n = start; n <= end; n++) {
+      var line = state.doc.lines[n - 1];
+      if (!line) continue;
+      var m = RE_LAW_NUM.exec(line.text || "");
+      if (!m) continue;
+      var txt = m[0].replace(/\s+/g, "");
+      if (nums[nums.length - 1] !== txt) nums.push(txt);
+    }
+    return nums;
+  }
+
+  // 新增块的条号倒推：优先沿用前一块（同一块的续写），前面没有就看后一块。
+  function clauseAnchorOf(chunk) {
+    var value = String((chunk && chunk.law_num) || "").trim();
+    if (!value || value === "（新增）") return "";
+    return RE_LAW_NUM.test(value) ? value.replace(/\s+/g, "") : "";
+  }
+
+  function inferAddLawNum() {
+    if (!state.doc || !state.doc.chunks.length) return "";
+    var chunks = state.doc.chunks;
+    var insertAt = chunks.length;
+    if (state.addAfterId) {
+      for (var i = 0; i < chunks.length; i++) {
+        if (chunks[i].id === state.addAfterId) { insertAt = i + 1; break; }
+      }
+    }
+    for (var j = Math.min(insertAt - 1, chunks.length - 1); j >= 0; j--) {
+      var prevAnchor = clauseAnchorOf(chunks[j]);
+      if (prevAnchor) return prevAnchor;
+    }
+    for (var k = insertAt; k < chunks.length; k++) {
+      var nextAnchor = clauseAnchorOf(chunks[k]);
+      if (nextAnchor) return nextAnchor;
+    }
+    return "";
+  }
+
   function fillKind(select, value) {
     select.innerHTML = "";
     CHUNK_KINDS.forEach(function (kind) {
@@ -1435,7 +1485,7 @@
     el.addErrors.textContent = "";
 
     // 如果原文里有选区（或右键菜单带入了选区）：把选区文本带进弹层，并记下行区间
-    if (!picked) picked = selectedText();
+    if (!picked || typeof picked.start !== "number") picked = selectedText();
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
       el.addText.value = picked.text;
@@ -1455,6 +1505,10 @@
       el.addHint.hidden = false;
     }
     el.addLawNum.value = "";
+    var inferredAddNum = inferAddLawNum();
+    el.addLawNum.placeholder = inferredAddNum
+      ? ("留空则按前后块倒推：" + inferredAddNum)
+      : "留空则为「（新增）」";
     fillKind(el.addKind, "paragraph");
     el.addDialog.showModal();
   }

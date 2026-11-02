@@ -47,7 +47,7 @@ def make_chunk(cid: str, text: str, *, law_num: str = "第一条", kind: str = "
 def base_chunks():
     return [
         make_chunk("测试法-0001", "第一条 为了测试。\n这是第二行。", span=[3, 4]),
-        make_chunk("测试法-0002", "第二条 测试结束。", span=[6, 6]),
+        make_chunk("测试法-0002", "第二条 测试结束。", law_num="第二条", span=[6, 6]),
         make_chunk("测试法-0003", "（资料性附录）\n附录内容。", law_num="A.1", kind="appendix", span=[9, 10]),
     ]
 
@@ -294,7 +294,7 @@ class DropAddPatchTest(unittest.TestCase):
         self.assertEqual(len(out), 4)
         new = out[-1]
         self.assertEqual(new["id"], "测试法-0004")
-        self.assertEqual(new["law_num"], "（新增）")
+        self.assertEqual(new["law_num"], "第二条")  # 追加在附录后，条号取最近的「第X条」邻居
         self.assertEqual(new["chunk_kind"], "paragraph")
         self.assertIsNone(new["span"])
         self.assertTrue(new["manual"])
@@ -311,7 +311,7 @@ class DropAddPatchTest(unittest.TestCase):
             apply_ops(base_chunks(), [{"op": "add", "text": "x", "chunk_kind": "nope"}], law_name=LAW)
 
     def test_add_with_span(self):
-        # 原文选区新增：带行区间，可定位回原文
+        # 原文选区新增：带行区间，可定位回原文；条号按前一块倒推（插在第二条后面 → 第二条）
         out = apply_ops(
             base_chunks(),
             [{"op": "add", "text": "从原文选中新增", "span": [7, 9], "after_id": "测试法-0002"}],
@@ -322,7 +322,22 @@ class DropAddPatchTest(unittest.TestCase):
         self.assertEqual(new["span"], [7, 9])
         self.assertTrue(new["manual"])
         self.assertEqual(new["align"], "manual")
-        self.assertEqual(new["law_num"], "（新增）")
+        self.assertEqual(new["law_num"], "第二条")
+
+    def test_add_infers_law_num_from_neighbors(self):
+        # 插在「第二条」后面 → 默认沿用第二条（同一块的续写）
+        out = apply_ops(base_chunks(), [{"op": "add", "text": "续写", "after_id": "测试法-0002"}], law_name=LAW)
+        self.assertEqual(out[2]["law_num"], "第二条")
+        # 显式写的条号优先
+        out2 = apply_ops(
+            base_chunks(),
+            [{"op": "add", "text": "续写", "law_num": "第三条", "after_id": "测试法-0002"}],
+            law_name=LAW,
+        )
+        self.assertEqual(out2[2]["law_num"], "第三条")
+        # 前一块不是「第X条」（附录 A.1）→ 不硬套，继续往前取最近的条号邻居（第二条）
+        out3 = apply_ops(base_chunks(), [{"op": "add", "text": "附注", "after_id": "测试法-0003"}], law_name=LAW)
+        self.assertEqual(out3[-1]["law_num"], "第二条")
 
     def test_add_span_errors(self):
         for bad in ([3], ["a", "b"], [0, 2], [5, 4], "3-4"):

@@ -68,7 +68,7 @@
 | 合并 merge | 保留**前一块** id | 前 + `\n` + 后；派生字段重算 | 保留前一块 | 保留前一块 | 重置 `1/1` |
 | 集体合并 merge_many | 保留**第一块** id | 各块正文按文档顺序 `\n` 连接；派生字段重算 | 保留第一块 | 保留第一块 | 重置 `1/1` |
 | 删除 drop | 删除 | — | — | — | — |
-| 新增 add | `max_seq+1` | 输入正文 | 输入值；留空 `（新增）` | 输入值，默认 `paragraph` | `1/1` |
+| 新增 add | `max_seq+1` | 输入正文 | 输入值；留空时按前后邻居倒推（见下），推不到才 `（新增）` | 输入值，默认 `paragraph` | `1/1` |
 | 改字/改条号 patch | 不变 | 改字则替换并重算派生字段 | 可只改 `law_num`（正文不动、派生字段不动） | 可改，须在 7 种枚举内 | 可改，须满足 `part_index ≤ part_total`；`table` 块不参与 part |
 
 实测（消防法 74 块）：拆 `-0001`（45 字）→ 上半 10 字/`token_len` 10/hash `accbb4ac…`、下半 `-0075` 35 字/hash `dcf0fd75…`/`law_num=第九九条`；合并 `-0002` 并上 `-0001` → 保留 `-0001`、`token_len` 123、hash `c8cc5226…`；`patch` 只改 `law_num` → `token_len`/`chunk_hash` 不变（正文未动）。
@@ -77,12 +77,14 @@
 
 **extras 侧车（第 2 层）在编辑时的对应**：拆分下半块与新增块只继承最小集合 `clause / region / ref_title / num_cn`，**`profile` / `namespace` / `probe` 会缺失**；合并保留前块 extras，`patch` 保留原 extras。P3 导出时需要为人工块按文件基线补齐这三个键（`namespace` 默认 `body`，`profile`/`probe` 取源文件 manifest 值），表格块拆分时表格信息（`table_label/table_title/table_rows/table_grid/table_mode`）留在上半块。
 
+**合并块的覆盖条号（视图层提示，不入契约）**：合并后卡片头显示「覆盖 第一条–第三条（3 条）」，由前端遍历该块 `span` 覆盖的原文行、收集其中的「第X条」得出（`coveredLawNums`）。`law_num` 是检索字段（BM25 会吃），所以不把区间串塞进 15 字段。
+
 ### 从原文未覆盖区域新增（P2 当前行为）
 
 原文里未被任何切片覆盖的行（前置说明、目录、章节标题行、空行、注释等）也可以拖选后右键「用选区新增」。此时 15 字段按以下方式确定：
 
 - `id` = `max_seq + 1`；`chunk` = 选区原文（**原样，含 Markdown 记号**）；`law_name` = 文件名；
-- `law_num` 默认 `（新增）`（无法从原文推出条号，**需人工补**，如 `前言` / `目录` / `第一章`）；
+- `law_num` 留空时按前后邻居倒推（`ops.infer_law_num`）：先取**前一块**的「第X条」（同一块的续写），前面没有可参照的条号就看**后一块**；参照只认「第X条」，表号 / 附录号 /「（新增）」不作参照，推不到才写 `（新增）`（此时**需人工补**，如 `前言` / `目录` / `第一章`）；
 - `chunk_kind` 默认 `paragraph`（弹层可改成 `front` / `title` / `appendix` 等）；
 - `law_type` / `law_level` / `issuer` / `effective_date` / `source` / `law_invalid` 继承**同文件第一块**（文件级默认值）；
 - `token_len` / `chunk_hash` 按新增正文重算；`part_index=1 / part_total=1`；

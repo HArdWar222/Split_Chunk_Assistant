@@ -576,6 +576,7 @@ body.no-lanes .line .lanes { display: none; }
 .chip:disabled:hover { background: #fbfcfe; border-color: var(--border); color: #475569; }
 
 .badge-manual { background: #fdf1e3; color: var(--warn); }
+.badge-cover { background: #eef2ff; color: #4338ca; cursor: help; }
 
 .op-dialog { width: min(640px, 94vw); }
 
