@@ -73,7 +73,8 @@
     sourceRoots: document.getElementById("cfg-source-roots"),
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
-    toast: document.getElementById("toast")
+    toast: document.getElementById("toast"),
+    ctxMenu: document.getElementById("ctx-menu")
   };
 
   // ---------- 工具 ----------
@@ -807,6 +808,116 @@
       window.setTimeout(applySelectionNow, 0);
     });
     document.addEventListener("selectionchange", scheduleSelectionCheck);
+    // 右键：在原文选区/切片上弹出上下文工作栏
+    el.source.addEventListener("contextmenu", openContextMenu);
+  }
+
+  // ---------- 右键上下文菜单：原文选区 ↔ 切片操作 ----------
+  function chunkAtLine(line) {
+    var doc = state.doc;
+    if (!doc || !line) return null;
+    for (var i = 0; i < doc.chunks.length; i++) {
+      var c = doc.chunks[i];
+      if (c.span && c.span[0] <= line && line <= c.span[1]) return c;
+    }
+    return null;
+  }
+
+  function hideCtxMenu() {
+    if (!el.ctxMenu || el.ctxMenu.hidden) return;
+    el.ctxMenu.hidden = true;
+    el.ctxMenu.innerHTML = "";
+  }
+
+  function ctxItem(label, hint, action, disabled) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-item";
+    btn.setAttribute("role", "menuitem");
+    var main = document.createElement("span");
+    main.className = "ctx-label";
+    main.textContent = label;
+    btn.appendChild(main);
+    if (hint) {
+      var small = document.createElement("span");
+      small.className = "ctx-hint";
+      small.textContent = hint;
+      btn.appendChild(small);
+    }
+    btn.disabled = !!disabled;
+    btn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hideCtxMenu();
+      action();
+    });
+    return btn;
+  }
+
+  function ctxSep() {
+    var sep = document.createElement("div");
+    sep.className = "ctx-sep";
+    return sep;
+  }
+
+  function openContextMenu(ev) {
+    if (!state.doc) return;
+    var row = ev.target && ev.target.closest ? ev.target.closest(".line") : null;
+    var picked = selectedText();
+    var line = row && row.dataset.line ? parseInt(row.dataset.line, 10) : 0;
+    if (!line && picked) line = picked.start;
+    var target = chunkAtLine(line);
+    if (!target && picked) {
+      var hits = chunksInLineRange(picked.start, picked.end);
+      target = hits.length ? hits[0] : null;
+    }
+
+    el.ctxMenu.innerHTML = "";
+    var count = 0;
+    var doc = state.doc;
+
+    if (picked && picked.text.trim()) {
+      var rangeLabel = picked.start === picked.end
+        ? ("第 " + picked.start + " 行")
+        : ("第 " + picked.start + "–" + picked.end + " 行");
+      el.ctxMenu.appendChild(ctxItem("✚ 用选区新增切片", rangeLabel + " · " + picked.text.length + " 字", function () {
+        openAdd(picked);
+      }));
+      count++;
+    }
+
+    if (target) {
+      var idx = doc.chunks.indexOf(target);
+      if (count) el.ctxMenu.appendChild(ctxSep());
+      el.ctxMenu.appendChild(ctxItem("✂ 拆分此切片…", target.id, function () { openSplit(target); }));
+      el.ctxMenu.appendChild(ctxItem("✎ 修改正文 / 条号…", target.id, function () { openEdit(target); }));
+      el.ctxMenu.appendChild(ctxItem("⤴ 并入上一块", "", function () { mergeChunk(target, "prev"); }, idx <= 0));
+      el.ctxMenu.appendChild(ctxItem("⤵ 并入下一块", "", function () { mergeChunk(target, "next"); }, idx >= doc.chunks.length - 1));
+      el.ctxMenu.appendChild(ctxItem("✕ 删除此切片", target.id, function () { dropChunk(target); }));
+      el.ctxMenu.appendChild(ctxSep());
+      el.ctxMenu.appendChild(ctxItem("◎ 定位到切片", target.span
+        ? ("原文第 " + target.span[0] + "–" + target.span[1] + " 行")
+        : "未对齐", function () {
+        selectChunk(target, { scrollSource: true, scrollCard: true });
+      }));
+      count++;
+    }
+
+    if (!count) { hideCtxMenu(); return; }
+    ev.preventDefault();
+    el.ctxMenu.hidden = false;
+    el.ctxMenu.style.left = "0px";
+    el.ctxMenu.style.top = "0px";
+    var w = el.ctxMenu.offsetWidth || 230;
+    var h = el.ctxMenu.offsetHeight || 280;
+    var x = ev.clientX || 0;
+    var y = ev.clientY || 0;
+    var maxX = (window.innerWidth || 1280) - w - 8;
+    var maxY = (window.innerHeight || 800) - h - 8;
+    if (x > maxX) x = Math.max(8, maxX);
+    if (y > maxY) y = Math.max(8, maxY);
+    el.ctxMenu.style.left = x + "px";
+    el.ctxMenu.style.top = y + "px";
   }
 
   // ---------- P2：人工编辑（拆 / 并 / 删 / 增 / 改 + 撤销重做） ----------
@@ -1020,14 +1131,14 @@
     });
   }
 
-  function openAdd() {
+  function openAdd(picked) {
     if (!state.doc) { showToast("先打开一个文件", "warn"); return; }
     state.opErrEl = el.addErrors;
     el.addErrors.hidden = true;
     el.addErrors.textContent = "";
 
-    // 如果原文里有选区：把选区文本带进弹层，并记下行区间（新增块可定位回原文）
-    var picked = selectedText();
+    // 如果原文里有选区（或右键菜单带入了选区）：把选区文本带进弹层，并记下行区间
+    if (!picked) picked = selectedText();
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
       el.addText.value = picked.text;
@@ -1214,6 +1325,7 @@
       var mod = ev.ctrlKey || ev.metaKey;
       var key = String(ev.key || "").toLowerCase();
       if (ev.key === "Escape") {
+        hideCtxMenu();
         [el.dialog, el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
           if (dlg && dlg.open) dlg.close();
         });
@@ -1251,6 +1363,13 @@
       }
     });
     bindDocEvents();
+    // 点菜单外部 / 滚动原文或切片 / 窗口尺寸变化时收起右键菜单
+    document.addEventListener("click", function (ev) {
+      if (!el.ctxMenu.hidden && !el.ctxMenu.contains(ev.target)) hideCtxMenu();
+    });
+    el.source.addEventListener("scroll", hideCtxMenu);
+    el.chunks.addEventListener("scroll", hideCtxMenu);
+    window.addEventListener("resize", hideCtxMenu);
     window.addEventListener("hashchange", function () {
       var key = keyFromHash();
       if (key && key !== state.docKey) selectByKey(key);
