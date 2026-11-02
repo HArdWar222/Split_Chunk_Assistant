@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 
 from chunk_studio.api import App
 from chunk_studio.config import Config
@@ -46,7 +47,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         self.assertEqual(data["app"], "SplitChunkAssistant")
-        self.assertEqual(data["phase"], "P0")
+        self.assertEqual(data["phase"], "P1")
 
     # -- /api/files -------------------------------------------------
     def test_files(self):
@@ -115,11 +116,53 @@ class AppTest(unittest.TestCase):
         status, _, raw = self.app.handle("POST", "/api/config", b"[1, 2]")
         self.assertEqual(status, 400)
 
-    # -- 其它路由 ---------------------------------------------------
-    def test_doc_is_p1_only(self):
-        status, data = self.body(self.get("/api/doc?key=national_laws/%E6%B5%8B%E8%AF%95%E6%B3%95"))
-        self.assertEqual(status, 501)
+    # -- /api/doc ---------------------------------------------------
+    def doc(self, key: str):
+        return self.body(self.get("/api/doc?key=" + quote(key, safe="")))
+
+    def test_doc_ok(self):
+        status, data = self.doc("national_laws/测试法")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["key"], "national_laws/测试法")
+        self.assertEqual(data["law_name"], "测试法")
+        self.assertEqual(len(data["lines"]), 5)
+        self.assertEqual(len(data["chunks"]), 2)
+        self.assertEqual(data["stats"]["n_chunks"], 2)
+        self.assertEqual(data["stats"]["n_aligned"], 2)
+        self.assertEqual(data["stats"]["n_miss"], 0)
+        self.assertEqual(data["stats"]["align_rate"], 1.0)
+        first = data["chunks"][0]
+        # 前端用 1-based 闭区间；fixtures 里第一条正文在第 3 行
+        self.assertEqual(first["span"], [3, 3])
+        self.assertEqual(first["align"], "exact")
+        self.assertIn("extras", first)
+        self.assertTrue(data["source_chars"] > 0)
+        self.assertFalse(data["edited"])
+
+    def test_doc_missing_key(self):
+        status, data = self.body(self.get("/api/doc"))
+        self.assertEqual(status, 400)
         self.assertFalse(data["ok"])
+
+    def test_doc_unknown_key(self):
+        status, data = self.doc("national_laws/不存在的法规")
+        self.assertEqual(status, 404)
+        self.assertFalse(data["ok"])
+
+    def test_doc_source_missing(self):
+        # 源 md 被删 → 404「源文件缺失」
+        (self.base / "national_laws" / "测试法.md").unlink()
+        status, data = self.doc("national_laws/测试法")
+        self.assertEqual(status, 404)
+        self.assertFalse(data["ok"])
+        self.assertIn("源文件", data["error"])
+
+    def test_doc_cached(self):
+        self.doc("national_laws/测试法")
+        status, data = self.doc("national_laws/测试法")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 2)
 
     def test_index(self):
         status, ctype, raw = self.get("/")

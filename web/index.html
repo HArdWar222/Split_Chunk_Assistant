@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SplitChunkAssistant · P0</title>
+  <title>SplitChunkAssistant</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <div class="brand">
       <span class="logo" aria-hidden="true">SC</span>
       <h1>SplitChunkAssistant</h1>
-      <span class="phase" id="phase">P0</span>
+      <span class="phase" id="phase">P1</span>
     </div>
     <div class="status" id="status">加载中…</div>
     <div class="actions">
@@ -21,7 +21,7 @@
   </header>
 
   <main class="layout">
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="文件列表">
       <div class="search-row">
         <input id="search" type="search" placeholder="搜索法规名 / 分组…" autocomplete="off" aria-label="搜索法规">
       </div>
@@ -29,10 +29,27 @@
       <nav class="tree" id="tree" aria-label="文件列表"></nav>
     </aside>
 
-    <section class="detail" id="detail">
-      <div class="empty">
-        <h2>选择左侧一份法规</h2>
-        <p>P0 只提供文件清单与配置。<b>P1</b> 会在这里并排显示原文与切片。</p>
+    <section class="source-pane" aria-label="原文">
+      <header class="pane-head">
+        <div class="pane-title" id="source-title">原文</div>
+        <div class="pane-meta" id="source-meta">选择左侧文件开始</div>
+      </header>
+      <div class="source" id="source">
+        <div class="empty">
+          <h2>原文 ↔ 切片</h2>
+          <p>点击左侧任意一份文件，这里会显示 Markdown 原文行；右栏是自动切好的切片。
+             <b>悬停</b>任一侧都会高亮另一侧对应的区域。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="chunks-pane" aria-label="切片">
+      <header class="pane-head">
+        <div class="pane-title">切片 <span class="count" id="chunk-count"></span></div>
+        <div class="pane-meta" id="chunk-meta"></div>
+      </header>
+      <div class="chunks" id="chunks">
+        <div class="empty"><p>尚未选择文件。</p></div>
       </div>
     </section>
   </main>

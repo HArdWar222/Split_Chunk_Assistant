@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import __phase__, __version__
 from .config import ConfigError
-from .manifest import ManifestError
+from .manifest import ManifestError, SourceMissingError
 from .studio import Studio
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -88,8 +88,15 @@ class App:
             return _json({"ok": True, "config": config, "message": "配置已保存"})
 
         if method == "GET" and path == "/api/doc":
-            key = (query.get("key") or [""])[0]
-            raise ApiError(501, "P1 才提供原文与切片联动（当前 P0 只有文件清单）")
+            key = (query.get("key") or [""])[0].strip()
+            if not key:
+                raise ApiError(400, "缺少 key 参数")
+            try:
+                return _json(self.studio.doc_payload(key))
+            except SourceMissingError as exc:
+                raise ApiError(404, str(exc)) from None
+            except ManifestError as exc:
+                raise ApiError(404, str(exc)) from None
 
         if method == "GET" and path in {"", "/", "/index.html"}:
             return self._static_file("index.html")

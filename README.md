@@ -6,8 +6,11 @@
 原文（Markdown）与切片（chunk）双向联动，支持人工 `split / merge / drop / add / 改字`，
 支持调整切分参数后重切，人工修改写入覆盖层，导出仍然是原来的 **15 字段契约**。
 
-**当前状态：P0 已实现（2026-11-03）** —— 只读文件清单工作台可用：97 个文件 / 12 718 块分组展示、
-搜索、文件元信息、可配置数据源（路径改完立即生效）。P1 起进入「原文 ↔ 切片」三栏联动（见 [docs/06-roadmap.md](docs/06-roadmap.md)）。
+**当前状态：P1 已实现（2026-11-03）** —— 「原文 ↔ 切片」三栏只读联动可用：
+左文件树、中原文 Markdown 源码行（行号/节标题/表格行）、右切片卡片；hover/click 双向高亮，
+深链 `#doc=<key>` 可分享定位，对齐状态如实分档（exact / substr / table_rows / table_label / miss）。
+首批验收目标「消防法 74/74」达成；全语料 12 718 块中 12 251 块可定位（96.3%）。
+下一步是 P2 人工编辑（split / merge / drop / add / 改字 + 撤销 + diff）。
 
 ---
 
@@ -76,7 +79,7 @@ SplitChunkAssistant 把「自动切块」变成「可人工复核与修正的切
 
 ---
 
-## 快速开始（P0 可用）
+## 快速开始（P1 可用）
 
 ```bat
 :: 前提：本机已装 Python 3.10+，且 FAC-RAG 位于本仓库的兄弟目录
@@ -88,8 +91,14 @@ set FAC_ROOT=C:\Users\QiuYe\Desktop\FAC-RAG
 python -m chunk_studio.server --port 8790 --open
 ```
 
-浏览器打开 http://127.0.0.1:8790 ：左侧是按分组排好的 97 个法规文件（点击看元信息），
-右上角「⚙ 设置」可改 `chunks_dir` / `fac_root` / 端口 / 各分组源目录，保存即生效。
+浏览器打开 http://127.0.0.1:8790 ：
+
+- 左侧 97 个法规文件（分组 / 搜索 / 块数 / gate 徽章），点击打开三栏；
+- 中间是原文 `.md` 的源码行（行号 gutter、标题/引用/表格/超长行折叠）；
+- 右侧是切片卡片（15 字段摘要 + extras + 对齐状态），顶部显示 `对齐 N/N (率) · 各档计数`；
+- hover 卡片 → 原文行淡高亮；hover 原文行 → 关联卡片标记；click 卡片 → 滚动并强高亮对应原文行；
+- 地址栏形如 `#doc=national_laws%2F中华人民共和国消防法`，可直接收藏/分享定位；
+- 「⚙ 设置」可改 `chunks_dir` / `fac_root` / 端口 / 各分组源目录，保存即生效。
 
 首次运行会在仓库根目录生成 `config.json`（已 gitignore）：
 
@@ -102,17 +111,29 @@ python -m chunk_studio.server --port 8790 --open
 }
 ```
 
-P0 的验收口径（单测覆盖）：
+P1 的验收口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 42 个测试
+python -m unittest discover -s tests -t . -v   :: 65 个测试
 ```
 
 - `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60
-- `/api/doc` 返回 501（P1 才提供联动，不假装有）
+- `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
+- 消防法：411 行 / 74 块 / 对齐 **74/74（100%）**
 - 静态页 `/`、`/static/app.js`、`/static/style.css` 均可直出
 
-P0 只消费 FAC-RAG **已切好的 JSON**（`_manifest.json` + `*.jsonl` + `_extras.jsonl`），
+全语料对齐实测（2026-11-03，`align_chunks`）：
+
+| 语料 | 块数 | 对齐率 | 主要档位 |
+|---|---|---|---|
+| 中华人民共和国消防法 | 74 | 100% | substr |
+| GB 50016-2018 建筑设计防火规范 | 531 | 100% | substr 466 / table_rows 64 |
+| 2025版山东省自由裁量标准 | 836 | 100% | table_rows 378 / table_label 306 |
+| DB37T 3135-2018 建筑施工隐患排查 | 739 | 99.9% | table_rows 661 / substr 72 |
+| TSG 21-2016 气瓶安全技术规程 | 561 | 100% | substr 466 / exact 64 |
+| 全部 97 份 | 12 718 | **96.3%** | 未对齐 467 块（集中在少数含合并单元格复杂表的文件，UI 灰标） |
+
+P1 只消费 FAC-RAG **已切好的 JSON**（`_manifest.json` + `*.jsonl` + `_extras.jsonl`），
 不 import `fac_rag`、不调用切块器；参数重切（P4）才会新增裸调用入口。
 
 ---

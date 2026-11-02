@@ -1,17 +1,16 @@
-"""SplitChunkAssistant —— FAC-RAG chunking v2 的可视化人工切片工作台。
+"""SplitChunkAssistant：FAC-RAG 切块产物的只读可视化工作台。
 
-P0：只读文件清单 + 配置面板。
-后续阶段：P1 原文↔切片联动、P2 人工编辑、P3 保存/导出/gate。
+分层（依赖方向自上而下）：
 
-模块分层（自下而上）
--------------------
-fac_bridge  只读 JSON 访问（唯一与 FAC-RAG 产物接触的地方）
-manifest    _manifest.json 内存视图
-config      config.json 的加载 / 校验 / 保存
-studio      数据门面（配置 + 清单 + 文件清单载荷）
-api         路由集中处（可脱离 HTTP 单测）
-server      stdlib ThreadingHTTPServer，只监听 127.0.0.1
+- ``web/``        零依赖前端单页（文件树 / 原文 / 切片三栏）
+- ``server.py``   stdlib ThreadingHTTPServer，127.0.0.1
+- ``api.py``      HTTP 路由，``App.handle`` 可脱离 socket 单测
+- ``studio.py``   数据门面：配置 + 文件清单 + 单文件三栏载荷 + 缓存
+- ``fac_bridge.py`` / ``manifest.py`` / ``source.py`` / ``align.py``
+                  只读 JSON 访问、源 md 定位、chunk ↔ 行对齐
+
+**本包不 import ``fac_rag``、不写 FAC-RAG 数据**。
 """
 
-__version__ = "0.1.0"
-__phase__ = "P0"
+__version__ = "0.2.0"
+__phase__ = "P1"
