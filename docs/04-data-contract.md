@@ -51,7 +51,32 @@
 - 新增块 → `max_seq + 1`；拆分产生新 id，合并保留前者 id，撤销栈负责还原。
 - 视图层 `span`（1-based 闭区间，非 15 字段契约）：拆分时在「原块 span 窗口」内按规范化行顺序定位，两半各自补回行区间；`second_law_num` 可指定下半块条号（留空继承原块）。
 
+### 编辑后 15 字段的对应规则（P2 已实现）
+
+把 15 字段按「谁负责维护」分三类，编辑时各按自己的规则走：
+
+| 类别 | 字段 | 规则 |
+|---|---|---|
+| A. 文件级继承（不随编辑变） | `law_name`、`law_type`、`law_level`、`issuer`、`effective_date`、`source`、`law_invalid` | 来自 `configs/sources.yaml` 分组默认值 + 源文件名；编辑不改、不丢；只有 `add` 从**同文件第一块**继承一份 |
+| B. 块级身份（命令决定） | `id`、`chunk`、`law_num`、`chunk_kind`、`part_index`、`part_total` | 见下方矩阵 |
+| C. 派生（系统永远重算，禁止手填） | `token_len`=`len(chunk)`、`chunk_hash`=规范化正文 sha256 前 16 | 每次正文变化后由 `_derive()` 重算 |
+
+| 操作 | `id` | `chunk` | `law_num` | `chunk_kind` | `part_*` |
+|---|---|---|---|---|---|
+| 拆分 split | 上半保留原 id；下半 `max_seq+1` | 上下两段各自裁切；派生字段重算 | 上半保留；下半默认继承，可用 `second_law_num` 指定 | 上下都继承原 kind | 两半都重置为 `1/1` |
+| 合并 merge | 保留**前一块** id | 前 + `\n` + 后；派生字段重算 | 保留前一块 | 保留前一块 | 重置 `1/1` |
+| 删除 drop | 删除 | — | — | — | — |
+| 新增 add | `max_seq+1` | 输入正文 | 输入值；留空 `（新增）` | 输入值，默认 `paragraph` | `1/1` |
+| 改字/改条号 patch | 不变 | 改字则替换并重算派生字段 | 可只改 `law_num`（正文不动、派生字段不动） | 可改，须在 7 种枚举内 | 可改，须满足 `part_index ≤ part_total`；`table` 块不参与 part |
+
+实测（消防法 74 块）：拆 `-0001`（45 字）→ 上半 10 字/`token_len` 10/hash `accbb4ac…`、下半 `-0075` 35 字/hash `dcf0fd75…`/`law_num=第九九条`；合并 `-0002` 并上 `-0001` → 保留 `-0001`、`token_len` 123、hash `c8cc5226…`；`patch` 只改 `law_num` → `token_len`/`chunk_hash` 不变（正文未动）。
+
+视图层的 `span` / `align` / `manual` **不属于** 15 字段契约：`span` 用于原文高亮与范围条，`manual=true` 表示人工改过（导出时写进 extras 侧车，便于审计），`align` 只是对齐状态（`exact/substr/table_rows/table_label/approximate/manual/miss`）。
+
+**extras 侧车（第 2 层）在编辑时的对应**：拆分下半块与新增块只继承最小集合 `clause / region / ref_title / num_cn`，**`profile` / `namespace` / `probe` 会缺失**；合并保留前块 extras，`patch` 保留原 extras。P3 导出时需要为人工块按文件基线补齐这三个键（`namespace` 默认 `body`，`profile`/`probe` 取源文件 manifest 值），表格块拆分时表格信息（`table_label/table_title/table_rows/table_grid/table_mode`）留在上半块。
+
 ### 已知契约级限制（来自代码审查）
+
 
 - `render.py` 的去重键**只看正文哈希**（不含 `law_num` / `chunk_kind`），
   因此「空正文占位块」与「不同条号但正文相同」可能被误吞；v2 产物中已有 1 块被去重丢弃。
