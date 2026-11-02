@@ -116,6 +116,34 @@ class SplitTest(unittest.TestCase):
         with self.assertRaises(OpNotFound):
             apply_ops(base_chunks(), [{"op": "split", "id": "不存在-0001", "at_line": 1}], law_name=LAW)
 
+    def test_split_with_source_lines_restores_spans(self):
+        """服务端传入源行时：拆开的两半都各自补回行区间（右栏显示行号、范围条断开）。"""
+        source = ["# 测试法", "", "第一条 为了测试。", "这是第二行。", "", "第二条 测试结束。"]
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "split", "id": "测试法-0001", "at_line": 1}],
+            law_name=LAW,
+            source_lines=source,
+        )
+        first, second = out[0], out[1]
+        self.assertEqual(first["span"], [3, 3])
+        self.assertEqual(second["span"], [4, 4])
+        self.assertEqual(first["align"], "manual")
+        self.assertEqual(second["align"], "manual")
+
+    def test_split_second_law_num(self):
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "split", "id": "测试法-0001", "at_line": 1, "second_law_num": "第二条"}],
+            law_name=LAW,
+        )
+        self.assertEqual(out[0]["law_num"], "第一条")
+        self.assertEqual(out[1]["law_num"], "第二条")
+
+    def test_split_without_source_lines_keeps_old_behavior(self):
+        out = apply_ops(base_chunks(), [{"op": "split", "id": "测试法-0001", "at_line": 1}], law_name=LAW)
+        self.assertIsNone(out[1]["span"])
+
 
 class MergeTest(unittest.TestCase):
     def test_merge_adjacent_restores_text(self):

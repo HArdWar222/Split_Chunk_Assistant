@@ -223,6 +223,8 @@ class Studio:
             "lines": out_lines,
             "chunks": out_chunks,
             "stats": base_stats,
+            # 私有：源文件原始行，用于编辑后给拆分块补行区间（不随 API 返回，不缓存到前端）
+            "_raw_lines": lines,
             "manifest": {
                 "n_chunks": entry.n_chunks,
                 "gate_ok": entry.gate_ok,
@@ -265,11 +267,18 @@ class Studio:
         """基线 + 会话内编辑命令重放后的三栏载荷。"""
         base = self._base_doc(key)
         ops = list(self._ops.get(key) or [])
+        raw_lines = base.get("_raw_lines") or []
         if ops:
-            chunks = apply_ops(base["chunks"], ops, law_name=base["law_name"])
+            chunks = apply_ops(
+                base["chunks"],
+                ops,
+                law_name=base["law_name"],
+                source_lines=raw_lines,
+            )
         else:
             chunks = base["chunks"]
         payload = dict(base)
+        payload.pop("_raw_lines", None)
         payload["chunks"] = chunks
         payload["stats"] = self._restat(chunks, base["stats"])
         payload["edited"] = False  # P3 覆盖层

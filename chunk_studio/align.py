@@ -289,3 +289,45 @@ def summarize_align(aligned: list[dict]) -> dict:
         "n_miss": len(aligned) - n_aligned,
         "align_kinds": kinds,
     }
+
+
+def locate_text_span(
+    norm_lines: list[str],
+    text: str,
+    *,
+    lo: int = 0,
+    hi: int | None = None,
+    rules: Iterable[str] = DEFAULT_CLEAN_RULES,
+) -> list[int] | None:
+    """在 ``norm_lines[lo:hi]`` 窗口里按行顺序定位一段正文，返回 0-based ``[start, end)``。
+
+    用于拆分 / 手工块补行区间：正文行是渲染清洗后的行，所以先用 ``norm_line``
+    同口径规范化，再在窗口内做「首行扫描 + 后续行顺序匹配」，不跨出窗口。
+    """
+    tlines = [t for t in (norm_line(x, rules) for x in str(text or "").split("\n")) if t]
+    if not tlines:
+        return None
+    n = len(norm_lines)
+    hi = n if hi is None else max(0, min(hi, n))
+    lo = max(0, min(lo, hi))
+    if lo >= hi:
+        return None
+    first = tlines[0]
+    found = -1
+    for k in range(lo, hi):
+        if norm_lines[k] == first or (len(first) >= 2 and first in norm_lines[k]):
+            found = k
+            break
+    if found < 0:
+        return None
+    last = found
+    j = found + 1
+    for t in tlines[1:]:
+        k = j
+        while k < hi and norm_lines[k] != t and (not t or t not in norm_lines[k]):
+            k += 1
+        if k < hi:
+            last = k
+            j = k + 1
+    return [found, last + 1]
+

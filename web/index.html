@@ -112,13 +112,17 @@
   <dialog id="split-dialog" class="dialog op-dialog">
     <form method="dialog" id="split-form">
       <h2>✂ 拆分切片</h2>
-      <p class="hint">选择在<b>哪一行之前</b>切开：上半块保留原 id，下半块获得新 id（max_seq+1）。
-        单行块按字符位置拆。</p>
+      <p class="hint">选择在<b>哪一行之前</b>切开：上半块保留原 id 与原条号，下半块获得新 id（max_seq+1）。
+        单行块按字符位置拆。拆完若下半块条号不同，可在下面直接填，或之后用「改」逐个改。</p>
       <div class="op-target" id="split-target"></div>
       <div class="split-lines" id="split-lines"></div>
       <label class="field" id="split-char-row" hidden>
         <span>切分字符位置 <code>at_char</code>（1 ~ 正文长度-1）</span>
         <input id="split-char" type="number" min="1" step="1">
+      </label>
+      <label class="field">
+        <span>下半块条号 <code>law_num</code>（可选，留空则与原块相同）</span>
+        <input id="split-law-num" type="text" spellcheck="false" placeholder="例如：第二条 或 5.2.1">
       </label>
       <div class="dialog-errors" id="split-errors" hidden></div>
       <div class="dialog-actions">

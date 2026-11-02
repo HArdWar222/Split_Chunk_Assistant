@@ -50,6 +50,7 @@
     splitLines: document.getElementById("split-lines"),
     splitCharRow: document.getElementById("split-char-row"),
     splitChar: document.getElementById("split-char"),
+    splitLawNum: document.getElementById("split-law-num"),
     splitErrors: document.getElementById("split-errors"),
     editDialog: document.getElementById("edit-dialog"),
     editForm: document.getElementById("edit-form"),
@@ -1252,6 +1253,8 @@
     el.splitErrors.textContent = "";
     el.splitTarget.textContent = chunk.id + " · " + (KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind);
     el.splitLines.innerHTML = "";
+    el.splitLawNum.value = "";
+    el.splitLawNum.placeholder = "留空则与原块相同：" + (chunk.law_num || "（无）");
     if (lines.length > 1) {
       el.splitCharRow.hidden = true;
       for (var k = 1; k < lines.length; k++) {
@@ -1293,6 +1296,8 @@
       if (!isFinite(atChar)) { opFailed({ message: "请输入切分字符位置" }, el.splitErrors); return; }
       op.at_char = atChar;
     }
+    var secondLawNum = String(el.splitLawNum.value || "").trim();
+    if (secondLawNum) op.second_law_num = secondLawNum;
     postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
       el.splitDialog.close();
       applyDocPayload(doc);

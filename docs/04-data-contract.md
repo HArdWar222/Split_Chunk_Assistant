@@ -49,6 +49,7 @@
 - `seq` 来自 unit 的 `meta["seq"]`：statute 用条号，standard / generic 用块流水号（从 1 递增）；
 - `part_total > 1` 时才有 `-p{i}` 后缀；`chunk_kind == "table"` 的块**永不拆 part**；
 - 新增块 → `max_seq + 1`；拆分产生新 id，合并保留前者 id，撤销栈负责还原。
+- 视图层 `span`（1-based 闭区间，非 15 字段契约）：拆分时在「原块 span 窗口」内按规范化行顺序定位，两半各自补回行区间；`second_law_num` 可指定下半块条号（留空继承原块）。
 
 ### 已知契约级限制（来自代码审查）
 

@@ -28,6 +28,8 @@ import hashlib
 import re
 from typing import Any
 
+from .align import locate_text_span, norm_line
+
 RE_ID = re.compile(r"^.+-(\d{4,})(?:-p(\d+))?$")
 
 CHUNK_KINDS = frozenset({"clause", "table", "title", "front", "appendix", "stub", "paragraph"})
@@ -169,7 +171,7 @@ def next_id(chunks: list[dict], law_name: str, reserved=None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _split(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dict]:
+def _split(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     original = chunks[index]
     text = str(original.get("chunk") or "")
@@ -217,10 +219,32 @@ def _split(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[d
     _derive(second, text=second_text)
     _require_text(second, "拆分")
 
+    # 给两块补行区间：在「原块 span」窗口内按规范化行顺序定位，
+    # 这样拆分后右栏仍显示原文行号、左侧范围条也能立刻断成两段。
+    # （只有服务端传入 source_lines 时才做；纯单测调用保持 span=None 的旧行为。）
+    if source_lines:
+        norm = [norm_line(line) for line in source_lines]
+        span = original.get("span")
+        if span and len(span) == 2:
+            lo, hi = max(0, int(span[0]) - 1), min(len(norm), int(span[1]))
+        else:
+            lo, hi = 0, len(norm)
+        first_span = locate_text_span(norm, first_text, lo=lo, hi=hi)
+        if first_span:
+            first["span"] = [first_span[0] + 1, first_span[1]]
+            first["align"] = "manual"
+        start_second = first_span[1] if first_span else lo
+        second_span = locate_text_span(norm, second_text, lo=start_second, hi=hi)
+        if second_span is None:
+            second_span = locate_text_span(norm, second_text, lo=lo, hi=hi)
+        if second_span:
+            second["span"] = [second_span[0] + 1, second_span[1]]
+            second["align"] = "manual"
+
     return chunks[:index] + [first, second] + chunks[index + 1 :]
 
 
-def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dict]:
+def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     first_id = op.get("id")
     second_id = op.get("with")
     index = find_index(chunks, first_id)
@@ -255,12 +279,12 @@ def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[d
     return chunks[:index] + [merged] + chunks[other + 1 :]
 
 
-def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dict]:
+def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     return chunks[:index] + chunks[index + 1 :]
 
 
-def _add(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dict]:
+def _add(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     text = str(op.get("text") or "")
     kind = str(op.get("chunk_kind") or "paragraph").strip() or "paragraph"
     if kind not in CHUNK_KINDS:
@@ -302,7 +326,7 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dic
     return chunks[: index + 1] + [new] + chunks[index + 1 :]
 
 
-def _patch(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[dict]:
+def _patch(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     chunk = _copy(chunks[index])
 
@@ -348,11 +372,18 @@ HANDLERS = {
 # ---------------------------------------------------------------------------
 
 
-def apply_ops(chunks: list[dict], ops: list[dict], *, law_name: str) -> list[dict]:
+def apply_ops(
+    chunks: list[dict],
+    ops: list[dict],
+    *,
+    law_name: str,
+    source_lines: list[str] | None = None,
+) -> list[dict]:
     """按顺序应用一串编辑命令，返回新块列表（输入不变）。
 
     ``reserved`` 记录基线里出现过的全部 id（每步再并入当前结果），
     保证会话内新 id 永不复用已删块编号。
+    ``source_lines`` 为源文件行（只读）；传了就为拆分块补行区间，不传则保持旧行为。
     """
     result = [_copy(chunk) for chunk in chunks]
     reserved = {str(chunk.get("id")) for chunk in (chunks or [])}
@@ -364,7 +395,7 @@ def apply_ops(chunks: list[dict], ops: list[dict], *, law_name: str) -> list[dic
         if handler is None:
             raise OpError(f"未知的编辑命令：{kind!r}（可选 {sorted(HANDLERS)}）")
         try:
-            result = handler(result, op, law_name, reserved)
+            result = handler(result, op, law_name, reserved, source_lines)
         except OpNotFound as exc:
             raise OpNotFound(f"第 {position + 1} 条命令（{kind}）失败：{exc}") from None
         except OpError as exc:
