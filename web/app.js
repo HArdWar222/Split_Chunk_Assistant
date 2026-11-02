@@ -646,6 +646,115 @@
     return hits;
   }
 
+  // ---------- 光标/选区位置 → 切片内拆分点 ----------
+  function unescapeHtml(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&nbsp;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&");
+  }
+
+  // 与后端 align.norm_line 同口径：去图片/HTML/面包屑/加粗/LaTeX 转义/全部空白
+  function normJs(raw) {
+    var s = String(raw === null || raw === undefined ? "" : raw);
+    s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, "[图示]").replace(/<img[^>]*>/gi, "[图示]");
+    s = s.replace(/<[^>]+>/g, " ");
+    s = unescapeHtml(s);
+    if (s.indexOf(" > ") >= 0) s = s.slice(s.lastIndexOf(" > ") + 3);
+    s = s.replace(/\*\*/g, "");
+    s = s.replace(/\\\(/g, "（").replace(/\\\)/g, "）").replace(/\\\[/g, "【").replace(/\\\]/g, "】");
+    return s.replace(/\s+/g, "");
+  }
+
+  // 源行字符偏移 → 清洗后正文行字符偏移（跳过被删掉的标记/空白/面包屑）
+  function mapCharOffset(raw, cleaned, offset) {
+    var r = String(raw || "");
+    var c = String(cleaned || "");
+    if (offset <= 0) return 0;
+    var ci = 0;
+    var limit = Math.min(offset, r.length);
+    for (var i = 0; i < limit; i++) {
+      var found = c.indexOf(r.charAt(i), ci);
+      if (found >= 0) ci = found + 1;
+    }
+    return ci;
+  }
+
+  // 屏幕坐标/选区 → 源文位置 { line, offset }
+  function sourcePosition(ev) {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed && sel.rangeCount) {
+      var range = sel.getRangeAt(0);
+      if (range && el.source.contains(range.startContainer) && el.source.contains(range.endContainer)) {
+        var line = lineOfNode(range.startContainer);
+        if (line) return { line: line, offset: lineCharOffset(state.lineEls[line - 1], range.startContainer, range.startOffset) };
+      }
+    }
+    var caret = null;
+    if (document.caretRangeFromPoint) caret = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+    if (caret && el.source.contains(caret.startContainer)) {
+      var line2 = lineOfNode(caret.startContainer);
+      if (line2) return { line: line2, offset: lineCharOffset(state.lineEls[line2 - 1], caret.startContainer, caret.startOffset) };
+    }
+    // 兜底：右键所在行 → 行首
+    var row = ev.target && ev.target.closest ? ev.target.closest(".line") : null;
+    if (row && row.dataset.line) return { line: parseInt(row.dataset.line, 10), offset: 0 };
+    return null;
+  }
+
+  // 把源文位置换算成 split 命令：优先行边界，否则字符级
+  function splitPlanAt(chunk, pos) {
+    if (!chunk || !chunk.span || !pos || !state.doc) return null;
+    if (pos.line < chunk.span[0] || pos.line > chunk.span[1]) return null;
+    var srcLine = state.doc.lines[pos.line - 1];
+    if (!srcLine || srcLine.truncated) return null; // 折叠超长行无法精确映射
+    var chunkLines = String(chunk.chunk || "").split("\n");
+    if (!chunkLines.length) return null;
+    var target = normJs(srcLine.text || "");
+    var j = -1;
+    for (var i = 0; i < chunkLines.length; i++) {
+      if (target && normJs(chunkLines[i]) === target) { j = i; break; }
+    }
+    if (j < 0 && target) {
+      for (var k = 0; k < chunkLines.length; k++) {
+        var n = normJs(chunkLines[k]);
+        if (n && (n.indexOf(target) >= 0 || target.indexOf(n) >= 0)) { j = k; break; }
+      }
+    }
+    if (j < 0) {
+      var spanLen = chunk.span[1] - chunk.span[0] + 1;
+      j = Math.round((pos.line - chunk.span[0]) / Math.max(1, spanLen) * chunkLines.length);
+      j = Math.max(0, Math.min(chunkLines.length - 1, j));
+    }
+    if (j === 0 && pos.offset === 0) return null; // 块首无法拆分
+    if (j > 0 && pos.offset === 0) return { kind: "line", at_line: j, textLine: j };
+    var text = String(chunk.chunk || "");
+    var prefix = 0;
+    for (var m = 0; m < j; m++) prefix += chunkLines[m].length + 1;
+    var lineClean = chunkLines[j] || "";
+    var content = lineClean;
+    if (lineClean.indexOf(" > ") >= 0) content = lineClean.slice(lineClean.lastIndexOf(" > ") + 3);
+    var charInLine = mapCharOffset(srcLine.text || "", content, pos.offset);
+    var atChar = prefix + (lineClean.length - content.length) + charInLine;
+    if (atChar <= 0 || atChar >= text.length) return null; // 块尾无法拆分
+    return { kind: "char", at_char: atChar, textLine: j };
+  }
+
+  function splitAtCursor(chunk, pos) {
+    var plan = splitPlanAt(chunk, pos);
+    if (!plan) {
+      showToast("光标位置无法定位拆分点（可能落在块首/块尾、或该行已折叠）", "warn");
+      return;
+    }
+    var op = { op: "split", id: chunk.id };
+    if (plan.kind === "line") op.at_line = plan.at_line;
+    else op.at_char = plan.at_char;
+    postOp(op, (plan.kind === "line" ? "已在第 " + plan.at_line + " 行处拆分 " : "已在光标处拆分 ") + chunk.id + "（Ctrl+Z 可撤销）");
+  }
+
   function clearSelectionMarks() {
     (state.selHits || []).forEach(function (id) {
       if (state.cardEls[id]) state.cardEls[id].classList.remove("hit");
@@ -864,17 +973,29 @@
     if (!state.doc) return;
     var row = ev.target && ev.target.closest ? ev.target.closest(".line") : null;
     var picked = selectedText();
+    var pos = sourcePosition(ev);
     var line = row && row.dataset.line ? parseInt(row.dataset.line, 10) : 0;
     if (!line && picked) line = picked.start;
+    if (!line && pos) line = pos.line;
     var target = chunkAtLine(line);
     if (!target && picked) {
       var hits = chunksInLineRange(picked.start, picked.end);
       target = hits.length ? hits[0] : null;
     }
+    var plan = target ? splitPlanAt(target, pos || { line: line, offset: 0 }) : null;
 
     el.ctxMenu.innerHTML = "";
     var count = 0;
     var doc = state.doc;
+
+    if (plan) {
+      el.ctxMenu.appendChild(ctxItem(
+        plan.kind === "line" ? "✂ 在此处拆分（行边界）" : "✂ 在光标处拆分",
+        "第 " + line + " 行 · " + target.id,
+        function () { splitAtCursor(target, pos || { line: line, offset: 0 }); }
+      ));
+      count++;
+    }
 
     if (picked && picked.text.trim()) {
       var rangeLabel = picked.start === picked.end

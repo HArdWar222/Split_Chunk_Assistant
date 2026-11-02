@@ -225,8 +225,10 @@ def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None) -> list[d
     second_id = op.get("with")
     index = find_index(chunks, first_id)
     other = find_index(chunks, second_id)
-    if other != index + 1:
-        raise OpError("只能合并相邻的两块（前者在前、后者紧随其后）")
+    if abs(other - index) != 1:
+        raise OpError("只能合并相邻的两块（前后紧挨着的两块）")
+    # 允许两种写法：{id: 前块, with: 后块} 或 {id: 后块, with: 前块}（前端「并↑/并↓」两种方向）
+    index, other = min(index, other), max(index, other)
 
     first = chunks[index]
     second = chunks[other]

@@ -142,6 +142,14 @@ class MergeTest(unittest.TestCase):
         with self.assertRaises(OpError):
             apply_ops(base_chunks(), [{"op": "merge", "id": "测试法-0001", "with": "测试法-0003"}], law_name=LAW)
 
+    def test_merge_reversed_order(self):
+        # 「并↑」写法：id 是后一块、with 是前一块，结果保留前一块 id
+        out = apply_ops(base_chunks(), [{"op": "merge", "id": "测试法-0002", "with": "测试法-0001"}], law_name=LAW)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["id"], "测试法-0001")
+        self.assertEqual(out[0]["chunk"], "第一条 为了测试。\n这是第二行。\n第二条 测试结束。")
+        self.assertEqual(out[0]["span"], [3, 6])
+
 
 class DropAddPatchTest(unittest.TestCase):
     def test_drop(self):
