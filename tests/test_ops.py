@@ -209,6 +209,81 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(out[0]["span"], [3, 6])
 
 
+class MergeManyTest(unittest.TestCase):
+    def test_merge_three_adjacent(self):
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0003"]}],
+            law_name=LAW,
+        )
+        self.assertEqual(len(out), 1)
+        merged = out[0]
+        self.assertEqual(merged["id"], "测试法-0001")
+        self.assertEqual(merged["law_num"], "第一条")
+        self.assertEqual(merged["chunk_kind"], "clause")
+        self.assertEqual(
+            merged["chunk"],
+            "第一条 为了测试。\n这是第二行。\n第二条 测试结束。\n（资料性附录）\n附录内容。",
+        )
+        self.assertEqual(merged["span"], [3, 10])
+        self.assertEqual(merged["align"], "approx")
+        self.assertFalse(merged["manual"])
+
+    def test_merge_many_any_order(self):
+        # 传入顺序无关，按文档顺序合并
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "merge_many", "ids": ["测试法-0003", "测试法-0001", "测试法-0002"]}],
+            law_name=LAW,
+        )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["id"], "测试法-0001")
+
+    def test_merge_many_with_manual_chunk_loses_span(self):
+        chunks = base_chunks()
+        chunks[1]["manual"] = True
+        out = apply_ops(
+            chunks,
+            [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0003"]}],
+            law_name=LAW,
+        )
+        self.assertIsNone(out[0]["span"])
+        self.assertEqual(out[0]["align"], "manual")
+        self.assertTrue(out[0]["manual"])
+
+    def test_merge_many_errors(self):
+        chunks = base_chunks()
+        with self.assertRaises(OpError):
+            apply_ops(chunks, [{"op": "merge_many", "ids": ["测试法-0001"]}], law_name=LAW)
+        with self.assertRaises(OpError):
+            apply_ops(chunks, [{"op": "merge_many", "ids": []}], law_name=LAW)
+        with self.assertRaises(OpError):
+            apply_ops(chunks, [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0002"]}], law_name=LAW)
+        with self.assertRaises(OpNotFound):
+            apply_ops(chunks, [{"op": "merge_many", "ids": ["测试法-0001", "测试法-9999"]}], law_name=LAW)
+
+    def test_merge_many_non_adjacent_error(self):
+        # 跳过中间块（0001 与 0003）不允许，避免把未选中的块吞掉
+        with self.assertRaises(OpError):
+            apply_ops(
+                base_chunks(),
+                [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0003"]}],
+                law_name=LAW,
+            )
+
+    def test_merge_many_diff(self):
+        chunks = base_chunks()
+        out = apply_ops(
+            chunks,
+            [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0003"]}],
+            law_name=LAW,
+        )
+        diff = chunk_diff(chunks, out)
+        self.assertEqual(diff["removed"], 2)
+        self.assertEqual(diff["added"], 0)
+        self.assertEqual(diff["modified"], 1)
+
+
 class DropAddPatchTest(unittest.TestCase):
     def test_drop(self):
         out = apply_ops(base_chunks(), [{"op": "drop", "id": "测试法-0002"}], law_name=LAW)

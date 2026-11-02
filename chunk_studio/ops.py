@@ -16,6 +16,7 @@ op 形状
 -------
 - ``{"op": "split", "id": "...", "at_line": 2}`` 或 ``{"op": "split", "id": "...", "at_char": 40}``
 - ``{"op": "merge", "id": "前一块", "with": "后一块"}``
+- ``{"op": "merge_many", "ids": ["...", "...", "..."]}``（连续多块集体合并，保留第一块 id）
 - ``{"op": "drop", "id": "..."}``
 - ``{"op": "add", "text": "...", "law_num": "...", "chunk_kind": "paragraph", "after_id": "..." | null}``
 - ``{"op": "patch", "id": "...", "chunk": "...", "law_num": "...", "chunk_kind": "..."}``（都可选）
@@ -305,6 +306,47 @@ def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None, source_li
     return chunks[:index] + [merged] + chunks[other + 1 :]
 
 
+def _merge_many(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
+    """把选中的连续多块合并成一块（保留第一块的 id / 条号 / kind）。"""
+    ids = op.get("ids")
+    if not isinstance(ids, (list, tuple)) or len(ids) < 2:
+        raise OpError("集体合并至少需要 2 个切片 id（ids: [\"...\", \"...\"]）")
+    indexes = sorted({find_index(chunks, chunk_id) for chunk_id in ids})
+    if len(indexes) != len(ids):
+        raise OpError("集体合并的 id 列表里有重复项")
+    start, end = indexes[0], indexes[-1]
+    if indexes != list(range(start, end + 1)):
+        raise OpError("集体合并只能选连续的切片（选中的块之间不能跳块）")
+
+    group = chunks[start : end + 1]
+    merged = _copy(group[0])
+    _derive(merged, text="\n".join(str(chunk.get("chunk") or "") for chunk in group))
+    _require_text(merged, "合并")
+
+    if not str(merged.get("law_num") or "").strip():
+        for chunk in group[1:]:
+            if str(chunk.get("law_num") or "").strip():
+                merged["law_num"] = chunk["law_num"]
+                break
+    if not (merged.get("extras") or {}):
+        for chunk in group[1:]:
+            if chunk.get("extras"):
+                merged["extras"] = copy.deepcopy(chunk["extras"])
+                break
+
+    spans = [chunk.get("span") for chunk in group]
+    merged["manual"] = any(bool(chunk.get("manual")) for chunk in group)
+    if all(span for span in spans) and not merged["manual"]:
+        merged["span"] = [min(int(span[0]) for span in spans), max(int(span[1]) for span in spans)]
+        merged["align"] = "approx"
+    else:
+        merged["span"] = None
+        merged["align"] = "manual"
+        merged["manual"] = True
+
+    return chunks[:start] + [merged] + chunks[end + 1 :]
+
+
 def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     return chunks[:index] + chunks[index + 1 :]
@@ -387,6 +429,7 @@ def _patch(chunks: list[dict], op: dict, law_name: str, reserved=None, source_li
 HANDLERS = {
     "split": _split,
     "merge": _merge,
+    "merge_many": _merge_many,
     "drop": _drop,
     "add": _add,
     "patch": _patch,

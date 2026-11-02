@@ -1096,6 +1096,24 @@
       count++;
     }
 
+    // 选区覆盖了 2 个以上切片 → 集体合并（保留第一块的 id / 条号 / kind）
+    if (picked && picked.start < picked.end) {
+      var selHits = chunksInLineRange(picked.start, picked.end);
+      if (selHits.length >= 2) {
+        var firstIdx = doc.chunks.indexOf(selHits[0]);
+        var lastIdx = doc.chunks.indexOf(selHits[selHits.length - 1]);
+        var group = doc.chunks.slice(firstIdx, lastIdx + 1);
+        if (group.length >= 2) {
+          el.ctxMenu.appendChild(ctxItem(
+            "⤵ 合并所选 " + group.length + " 个切片",
+            "第 " + picked.start + "–" + picked.end + " 行",
+            function () { mergeMany(group); }
+          ));
+          count++;
+        }
+      }
+    }
+
     if (target) {
       var idx = doc.chunks.indexOf(target);
       if (count) el.ctxMenu.appendChild(ctxSep());
@@ -1254,6 +1272,24 @@
     var withChunk = direction === "prev" ? chunks[index - 1] : chunks[index + 1];
     if (!withChunk) return;
     postOp({ op: "merge", id: chunk.id, with: withChunk.id }, "已合并 " + chunk.id + " 与 " + withChunk.id);
+  }
+
+  // 集体合并：把原文选区覆盖的连续多块合并成一块（保留第一块的 id / 条号 / kind）
+  function mergeMany(chunks) {
+    if (!state.doc || !chunks || chunks.length < 2) return;
+    var ids = chunks.map(function (c) { return c.id; });
+    postOp(
+      { op: "merge_many", ids: ids },
+      "已合并 " + ids.length + " 块（保留 " + ids[0] + "，Ctrl+Z 可撤销）",
+      function (doc) {
+        for (var i = 0; i < doc.chunks.length; i++) {
+          if (doc.chunks[i].id === ids[0]) {
+            selectChunk(doc.chunks[i], { scrollSource: true, scrollCard: true });
+            break;
+          }
+        }
+      }
+    );
   }
 
   function openSplit(chunk) {

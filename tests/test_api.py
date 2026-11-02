@@ -235,6 +235,20 @@ class AppTest(unittest.TestCase):
         self.assertEqual(len(data["chunks"]), 2)
         self.assertEqual(data["diff"]["removed"], 1)
 
+    def test_op_merge_many(self):
+        # 选区集体合并：两块并成一块，保留第一块 id
+        status, data = self.apply_op({"op": "merge_many", "ids": ["测试法-0001", "测试法-0002"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 1)
+        self.assertEqual(data["chunks"][0]["id"], "测试法-0001")
+        self.assertEqual(data["chunks"][0]["chunk"], "第一条 为了测试。\n第二条 测试结束。")
+        self.assertEqual(data["diff"]["removed"], 1)
+        self.assertEqual(data["diff"]["modified"], 1)
+        self.assertTrue(data["dirty"])
+        # 少于 2 个 id → 400
+        status, data = self.apply_op({"op": "merge_many", "ids": ["测试法-0001"]})
+        self.assertEqual(status, 400)
+
     def test_undo_redo(self):
         self.apply_op({"op": "split", "id": "测试法-0001", "at_char": 4})
         status, data = self.body(self.post("/api/undo", {"key": self.KEY}))
