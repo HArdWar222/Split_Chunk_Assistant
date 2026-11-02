@@ -75,7 +75,20 @@
 
 **extras 侧车（第 2 层）在编辑时的对应**：拆分下半块与新增块只继承最小集合 `clause / region / ref_title / num_cn`，**`profile` / `namespace` / `probe` 会缺失**；合并保留前块 extras，`patch` 保留原 extras。P3 导出时需要为人工块按文件基线补齐这三个键（`namespace` 默认 `body`，`profile`/`probe` 取源文件 manifest 值），表格块拆分时表格信息（`table_label/table_title/table_rows/table_grid/table_mode`）留在上半块。
 
+### 从原文未覆盖区域新增（P2 当前行为）
+
+原文里未被任何切片覆盖的行（前置说明、目录、章节标题行、空行、注释等）也可以拖选后右键「用选区新增」。此时 15 字段按以下方式确定：
+
+- `id` = `max_seq + 1`；`chunk` = 选区原文（**原样，含 Markdown 记号**）；`law_name` = 文件名；
+- `law_num` 默认 `（新增）`（无法从原文推出条号，**需人工补**，如 `前言` / `目录` / `第一章`）；
+- `chunk_kind` 默认 `paragraph`（弹层可改成 `front` / `title` / `appendix` 等）；
+- `law_type` / `law_level` / `issuer` / `effective_date` / `source` / `law_invalid` 继承**同文件第一块**（文件级默认值）；
+- `token_len` / `chunk_hash` 按新增正文重算；`part_index=1 / part_total=1`；
+- 视图层：`span` = 选区行区间（1-based 闭区间），`align="manual"`、`manual=true`，`extras={"region":"body"}`（P3 导出时补 `profile/namespace/probe`）；
+- 纯空白选区会被后端拒绝（「新增切片正文不能为空」）。
+
 ### 已知契约级限制（来自代码审查）
+
 
 
 - `render.py` 的去重键**只看正文哈希**（不含 `law_num` / `chunk_kind`），
