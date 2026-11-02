@@ -291,6 +291,42 @@
         if (lineChunks[n]) lineChunks[n].push(chunk);
       }
     }
+
+    // 切片范围条：每块的行区间分配到 4 条泳道（贪心：互不重叠的块共用一条）
+    var MAX_LANES = 4;
+    var laneEnds = [];
+    var laneOfChunk = new Array(doc.chunks.length);
+    doc.chunks.forEach(function (chunk, idx) {
+      if (!chunk.span) return;
+      var start = chunk.span[0];
+      var end = chunk.span[1];
+      var lane = -1;
+      for (var l = 0; l < laneEnds.length; l++) {
+        if (laneEnds[l] < start) { lane = l; break; }
+      }
+      if (lane < 0) {
+        if (laneEnds.length < MAX_LANES) { lane = laneEnds.length; laneEnds.push(end); }
+        else { lane = MAX_LANES - 1; }
+      }
+      laneEnds[lane] = Math.max(laneEnds[lane] || 0, end);
+      laneOfChunk[idx] = lane;
+    });
+    var laneBuckets = new Array(total + 1);
+    for (var b = 1; b <= total; b++) laneBuckets[b] = {};
+    doc.chunks.forEach(function (chunk, idx) {
+      if (!chunk.span) return;
+      var lane = laneOfChunk[idx];
+      for (var k = chunk.span[0]; k <= chunk.span[1]; k++) {
+        var bucket = laneBuckets[k];
+        if (!bucket) continue;
+        var cell = bucket[lane];
+        if (!cell) cell = bucket[lane] = { lane: lane, chunks: [], start: false, end: false };
+        cell.chunks.push(idx);
+        if (chunk.span[0] === k) cell.start = true;
+        if (chunk.span[1] === k) cell.end = true;
+      }
+    });
+
     for (var j = 0; j < total; j++) {
       var line = doc.lines[j];
       var row = document.createElement("div");
@@ -299,6 +335,27 @@
       var no = document.createElement("span");
       no.className = "no";
       no.textContent = String(line.n);
+      var lanes = document.createElement("span");
+      lanes.className = "lanes";
+      var buckets = laneBuckets[line.n] || {};
+      Object.keys(buckets).forEach(function (key) {
+        var cell = buckets[key];
+        var bar = document.createElement("span");
+        bar.className = "lane lane-" + cell.lane;
+        if (cell.start) bar.className += " start";
+        if (cell.end) bar.className += " end";
+        if (cell.start && cell.end) bar.className += " only";
+        bar.dataset.chunk = String(cell.chunks[0]);
+        if (cell.chunks.length === 1) {
+          var only = doc.chunks[cell.chunks[0]];
+          bar.title = "切片 #" + (cell.chunks[0] + 1) + " · " + only.id + " · 第 " + only.span[0] + "–" + only.span[1] + " 行";
+        } else {
+          var ids = cell.chunks.slice(0, 4).map(function (idx) { return doc.chunks[idx].id; }).join(", ");
+          bar.title = "第 " + line.n + " 行被 " + cell.chunks.length + " 个切片覆盖：" + ids +
+            (cell.chunks.length > 4 ? " …" : "");
+        }
+        lanes.appendChild(bar);
+      });
       var txt = document.createElement("span");
       txt.className = "txt";
       if (line.text === "") {
@@ -308,6 +365,7 @@
       }
       if (line.truncated) row.className += " truncated";
       row.appendChild(no);
+      row.appendChild(lanes);
       row.appendChild(txt);
       frag.appendChild(row);
       lineEls.push(row);
@@ -358,7 +416,9 @@
 
       var foot = document.createElement("div");
       foot.className = "chunk-foot";
+      var spanText = chunk.span ? "第 " + chunk.span[0] + "–" + chunk.span[1] + " 行" : "未对齐";
       foot.innerHTML = "<span>" + escapeHtml(chunk.id) + "</span>" +
+        "<span class='chunk-span'>" + spanText + "</span>" +
         "<span>" + fmtInt(chunk.token_len) + " 字符</span>";
       card.appendChild(foot);
 
@@ -617,6 +677,14 @@
       clearRelatedCards();
     });
     el.source.addEventListener("click", function (ev) {
+      var bar = ev.target.closest(".lane");
+      if (bar && bar.dataset.chunk !== undefined) {
+        var hit = state.doc && state.doc.chunks[parseInt(bar.dataset.chunk, 10)];
+        if (hit) {
+          selectChunk(hit, { scrollSource: false, scrollCard: true });
+          return;
+        }
+      }
       var row = ev.target.closest(".line");
       if (!row) return;
       var line = parseInt(row.dataset.line, 10);
@@ -714,6 +782,10 @@
   }
 
   // ---------- 其他 ----------
+  function applyLanesVisibility(on) {
+    document.body.classList.toggle("no-lanes", !on);
+  }
+
   function initHealth() {
     getJSON("/api/health").then(function (h) {
       if (h.phase) el.phase.textContent = h.phase;
@@ -733,6 +805,17 @@
     el.btnSettings.addEventListener("click", openSettings);
     el.btnCancel.addEventListener("click", function () { el.dialog.close(); });
     el.form.addEventListener("submit", saveSettings);
+    var laneToggle = document.getElementById("toggle-lanes");
+    if (laneToggle) {
+      var stored = null;
+      try { stored = window.localStorage.getItem("sca.lanes"); } catch (e) { stored = null; }
+      laneToggle.checked = stored !== "0";
+      applyLanesVisibility(laneToggle.checked);
+      laneToggle.addEventListener("change", function () {
+        applyLanesVisibility(laneToggle.checked);
+        try { window.localStorage.setItem("sca.lanes", laneToggle.checked ? "1" : "0"); } catch (e) { /* 忽略 */ }
+      });
+    }
     document.addEventListener("keydown", function (ev) {
       if (ev.key === "Escape" && el.dialog.open) el.dialog.close();
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {

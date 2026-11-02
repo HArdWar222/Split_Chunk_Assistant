@@ -255,7 +255,7 @@ body {
 
 .line {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 52px 20px minmax(0, 1fr);
   padding: 0 4px;
   border-radius: 4px;
   line-height: 1.55;
@@ -269,6 +269,46 @@ body {
   font-size: 11px;
   user-select: none;
 }
+
+/* 切片范围条（泳道）：每块的行区间画成一根竖条，4 条泳道承载重叠 */
+.line .lanes { position: relative; user-select: none; }
+
+.line .lane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 1px;
+  opacity: .8;
+  cursor: pointer;
+}
+
+.line .lane:hover { opacity: 1; }
+.line .lane.start { top: 3px; border-top-left-radius: 2px; border-top-right-radius: 2px; }
+.line .lane.end { bottom: 3px; border-bottom-left-radius: 2px; border-bottom-right-radius: 2px; }
+.line .lane.only { top: 3px; bottom: 3px; }
+
+.line .lane-0 { left: 2px; background: #60a5fa; }
+.line .lane-1 { left: 6px; background: #34d399; }
+.line .lane-2 { left: 10px; background: #f59e0b; }
+.line .lane-3 { left: 14px; background: #a78bfa; }
+
+body.no-lanes .line { grid-template-columns: 52px minmax(0, 1fr); }
+body.no-lanes .line .lanes { display: none; }
+
+.lane-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  float: right;
+  margin-top: -18px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.lane-toggle input { margin: 0; cursor: pointer; }
 
 .line .txt { white-space: pre-wrap; word-break: break-word; }
 
@@ -365,6 +405,7 @@ body {
 }
 
 .chunk-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chunk-foot .chunk-span { color: var(--muted); flex: none; }
 
 /* 空态 */
 .empty {

@@ -33,13 +33,17 @@
       <header class="pane-head">
         <div class="pane-title" id="source-title">原文</div>
         <div class="pane-meta" id="source-meta">选择左侧文件开始</div>
+        <label class="lane-toggle" title="把每个切片覆盖的原文行范围画成左侧竖条（点击竖条可选中切片）">
+          <input type="checkbox" id="toggle-lanes" checked> 范围条
+        </label>
       </header>
       <div class="source" id="source">
         <div class="empty">
           <h2>原文 ↔ 切片</h2>
           <p>点击左侧任意一份文件，这里会显示 Markdown 原文行；右栏是自动切好的切片。
              <b>悬停</b>任一侧都会高亮另一侧对应的区域；
-             <b>在原文里拖选一段文字</b>，右侧覆盖该范围的切片会被高亮（状态栏显示对应关系）。</p>
+             <b>在原文里拖选一段文字</b>，右侧覆盖该范围的切片会被高亮；
+             左侧<b>彩色竖条</b>是每个切片覆盖的行范围（悬停看切片 id，点击选中）。</p>
         </div>
       </div>
     </section>
