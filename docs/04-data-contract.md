@@ -1,0 +1,151 @@
+# 04 · 数据契约（FAC-RAG chunking v2）
+
+> 本工具**不改变契约**：读取、编辑、导出的都是同一种块。以下内容来自对 FAC-RAG
+> `fac_rag/contracts.py`、`chunking_v2/*`、`data/chunks_v2/*` 的实际核对（2026-11-02）。
+
+---
+
+## 1. 单块 chunk：15 字段（唯一契约）
+
+| # | 字段 | 类型 | 说明 |
+|---|---|---|---|
+| 1 | `id` | str | 全局唯一：`{law_name}-{seq:04d}`，多 part 追加 `-p{i}` |
+| 2 | `chunk` | str | 块正文（渲染清洗后，可能带面包屑）。**检索唯一消费字段** |
+| 3 | `law_name` | str | 法规/标准名（源文件名 stem） |
+| 4 | `law_num` | str | 条号/表号：`第一条`、`1`、`A.7 表D.1 第1-2行` |
+| 5 | `law_invalid` | str | 失效日期，占位默认 `2030-12-12` |
+| 6 | `law_type` | str | 法律 / 行政法规 / 部门规章 / 地方性法规 / 国家标准 / 行业标准 |
+| 7 | `law_level` | str | 法律 / 行政法规 / … / 国家标准 / 行业标准 |
+| 8 | `issuer` | str | 发布机关 |
+| 9 | `effective_date` | str | 生效日期（可空） |
+| 10 | `source` | str | 来源标注：`法律法规` / `GB` |
+| 11 | `chunk_kind` | enum | `clause` / `table` / `title` / `front` / `appendix` / `stub` / `paragraph` |
+| 12 | `token_len` | int | `len(chunk)` 字符数（非 BPE 计数），派生 |
+| 13 | `part_index` | int | 分片序号，1 起 |
+| 14 | `part_total` | int | 分片总数，≥1 |
+| 15 | `chunk_hash` | str | 规范化正文 sha256 前 16 位，派生；去重与审计键 |
+
+**示例**（`national_laws__中华人民共和国消防法.jsonl` 第 1 块）：
+
+```json
+{"id":"中华人民共和国消防法-0001","chunk":"为了预防火灾和减少火灾危害，…制定本法。",
+ "law_name":"中华人民共和国消防法","law_num":"第一条","law_invalid":"2030-12-12",
+ "law_type":"法律","law_level":"法律","issuer":"全国人民代表大会常务委员会",
+ "effective_date":"","chunk_kind":"clause","token_len":45,"source":"法律法规",
+ "part_index":1,"part_total":1,"chunk_hash":"9cb48b1e904c448d"}
+```
+
+**示例**（用户实测的 DB37T 2464 第 1 块，一次性实切，不在 v2 数据集内）：
+
+```json
+{"id":"DB37T 2464-2024  “九小场所”消防安全管理要求-0001","chunk":"范围\n本文件规定了…",
+ "law_num":"1","law_invalid":"2030-12-12","chunk_kind":"clause","token_len":104,
+ "part_index":1,"part_total":1,"chunk_hash":"0d6044dd149f0001"}
+```
+
+### id 与 part 规则
+
+- 正则：`^(.+)-(\d{4,})(?:-p(\d+))?$`；
+- `seq` 来自 unit 的 `meta["seq"]`：statute 用条号，standard / generic 用块流水号（从 1 递增）；
+- `part_total > 1` 时才有 `-p{i}` 后缀；`chunk_kind == "table"` 的块**永不拆 part**；
+- 新增块 → `max_seq + 1`；拆分产生新 id，合并保留前者 id，撤销栈负责还原。
+
+### 已知契约级限制（来自代码审查）
+
+- `render.py` 的去重键**只看正文哈希**（不含 `law_num` / `chunk_kind`），
+  因此「空正文占位块」与「不同条号但正文相同」可能被误吞；v2 产物中已有 1 块被去重丢弃。
+- 工具侧不修此问题（属 FAC-RAG 改造项），但会在 UI 里给「疑似重复」标记。
+
+---
+
+## 2. extras 侧车（不进正文、不进向量）
+
+`data/chunks_v2/_extras.jsonl` 每行：`{"id": "...", "extras": {...}}`；`runs/chunks_preview/*.jsonl`
+则把 extras 内联在块对象里（`15 字段 + "extras"`），本工具两者都兼容。
+
+| 键 | 适用 | 含义 |
+|---|---|---|
+| `clause` | 通用 | 所属条号（表格/段落块挂靠） |
+| `region` | 通用 | 区域：`body` / `appendix` / `front` / `text` … |
+| `profile` | 通用 | 识别使用的 profile 名 |
+| `namespace` | 通用 | 命名空间（与 region 联动） |
+| `ref_title` / `num_cn` | 通用 | 条号标题 / 中文数字序号 |
+| `probe` | 通用 | `{family, confidence, heading_mode}` 识别诊断 |
+| `table_label` | 表格 | 表号（表A.1） |
+| `table_title` | 表格 | 表题 |
+| `table_rows` | 表格 | 行数 |
+| `table_mode` | 表格 | `model`（整表）/ `pack`（打包） |
+| `table_grid` | 表格 | `{headers, rows, header_rows, width}` 表格网格 |
+
+示例：
+
+```json
+{"id":"2025版山东省自由裁量标准-0001",
+ "extras":{"ref_title":"山东省应急管理 行政处罚自由裁量基准","region":"body",
+ "profile":"tabular","namespace":"body",
+ "probe":{"family":"tabular","confidence":0.9,"heading_mode":"off"}}}
+```
+
+---
+
+## 3. 单文件 record（8 键）
+
+`chunk_file` / `chunk_file_full` 的 record 严格是这 8 个键：
+
+| 键 | 内容 |
+|---|---|
+| `path` | 源文件绝对路径 |
+| `folder` | 所属语料目录 |
+| `law_name` | 文件名 stem |
+| `chunks` | 15 字段块列表 |
+| `parsed` | `ParseResult` **dataclass 对象**（title / units / gaps / warnings / skipped_lines），序列化需要 `dataclasses.asdict` |
+| `sanity` | `{n_chunks, n_law_num_parseable, law_num_ratio}`；条号可解析率低于阈值会拒绝整份（generic/tabular 阈值为 0，其余 0.5） |
+| `summary` | `{n_chunks, n_units, n_parts_extra, chars_in_chunks, chars_in_source, char_coverage, kinds, n_gaps, n_warnings, max_chunk_chars, over_max_chars}` |
+| `source_chars` | 源文件字符数 |
+
+---
+
+## 4. 诊断：gate 与 report
+
+**gate**（`chunking_v2/gate.py`）：
+
+```json
+{"ok": true, "n_chunks": 74, "failures": [],
+ "metrics": {"line_coverage": 0.94, "toc_leak": 0.0, "bad_block_ratio": 0.0,
+             "ref_series": "...", "dup_ref_ratio": 0.0, "table_blocks": 0,
+             "warnings": 0, "..."}}
+```
+
+metrics 共 26 项，覆盖行覆盖率、目次泄漏、坏块比例、条号序列、重复条号、表格块、
+告警数与各类假设检查。阈值来自 `GateRule`：`min_line_coverage=0.60`、
+`max_bad_block_ratio=0.02`、`max_dup_ref_ratio=0.01`、`block_count_tolerance=0.40`、`max_warnings=5`。
+
+**report**（probe 识别报告）：`family`（standard / statute / tabular / generic …）、
+`confidence`、`features`（16 项行级特征）、`flags`、`heading_mode`（auto/on/off）、
+`profile`、`hint`。
+
+---
+
+## 5. 调用家族（6 个入口）
+
+| 函数 | 返回 | 用途 |
+|---|---|---|
+| `chunk_file(path, group=..., strategy=None, verbose=False)` | `record` | v1 兼容的单文件切块 |
+| `chunk_file_full(...)` | `(record, extras_by_id, probe_report)` | 带侧车与识别报告 |
+| `chunk_file_gate(...)` | `(record, gate_result)` | 切块 + 质检 |
+| `chunk_file_run(...)` | `(record, extras_by_id, gate_result, probe_report)` | 演示/全量入口 |
+| `chunk_folder(cfg, sources, folder=None)` | `list[record]` | 按语料目录批量 |
+| `gate_chunks(chunks, source_text, ...)` | `gate_result` | 对已有块补跑质检，**不重切** |
+
+本工具实际调用：`chunk_file_full`（读取/重切）、`gate_chunks`（保存后质检）、
+`expand_lines`（原文行映射）、`contracts.Chunk.finalize()`（保存校验）。
+
+---
+
+## 6. 下游消费约定
+
+- 检索 / 向量化：只用 `chunk`；
+- BM25：`chunk` + `law_name` + `law_num`；
+- 展示与过滤：`chunk_kind`、`law_type`、`law_level`、`part_index/part_total`；
+- 去重与审计：`chunk_hash`；
+- **本工具的编辑不改变上述消费方式**：导出 JSONL 直接可被现有索引/评估流程读取。

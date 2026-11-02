@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# 运行时产物
+edits/
+exports/
+cache/
+*.log
+
+# 本地历史资料（不随仓库发布）
+reference/
+scratch/
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
