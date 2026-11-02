@@ -25,3 +25,7 @@ tests/_tmp/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 前端临时测试工具
+_jsdom/
+_npmcache/

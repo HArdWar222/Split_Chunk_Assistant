@@ -17,7 +17,9 @@
     hlEls: [],         // 当前高亮的源行元素
     hoverLine: null,   // 当前悬停的源行号
     selHits: [],       // 当前选区命中的 chunk id
-    selRange: null     // 当前选区行范围 {start, end}（1-based 闭区间）
+    selRange: null,    // 当前选区行范围 {start, end}（1-based 闭区间）
+    pendingChunk: null,// 当前弹层操作的切片
+    addAfterId: null   // 新增切片的插入位置（null = 末尾）
   };
 
   var el = {
@@ -34,6 +36,33 @@
     chunks: document.getElementById("chunks"),
     btnRefresh: document.getElementById("btn-refresh"),
     btnSettings: document.getElementById("btn-settings"),
+    btnUndo: document.getElementById("btn-undo"),
+    btnRedo: document.getElementById("btn-redo"),
+    dirty: document.getElementById("dirty"),
+    diff: document.getElementById("diff"),
+    btnAdd: document.getElementById("btn-add"),
+    btnReset: document.getElementById("btn-reset"),
+    chunksHint: document.getElementById("chunks-hint"),
+    splitDialog: document.getElementById("split-dialog"),
+    splitForm: document.getElementById("split-form"),
+    splitTarget: document.getElementById("split-target"),
+    splitLines: document.getElementById("split-lines"),
+    splitCharRow: document.getElementById("split-char-row"),
+    splitChar: document.getElementById("split-char"),
+    splitErrors: document.getElementById("split-errors"),
+    editDialog: document.getElementById("edit-dialog"),
+    editForm: document.getElementById("edit-form"),
+    editTarget: document.getElementById("edit-target"),
+    editText: document.getElementById("edit-text"),
+    editLawNum: document.getElementById("edit-law-num"),
+    editKind: document.getElementById("edit-kind"),
+    editErrors: document.getElementById("edit-errors"),
+    addDialog: document.getElementById("add-dialog"),
+    addForm: document.getElementById("add-form"),
+    addText: document.getElementById("add-text"),
+    addLawNum: document.getElementById("add-law-num"),
+    addKind: document.getElementById("add-kind"),
+    addErrors: document.getElementById("add-errors"),
     dialog: document.getElementById("settings-dialog"),
     form: document.getElementById("settings-form"),
     chunksDir: document.getElementById("cfg-chunks-dir"),
@@ -254,6 +283,7 @@
       state.activeChunk = null;
       state.hoverChunk = null;
       renderDocument(doc);
+      syncEditUI(doc);
       setStatus("已加载 " + doc.law_name + " · " + fmtInt(doc.stats.n_chunks) + " 块 · 对齐 " +
         fmtInt(doc.stats.n_aligned) + "/" + fmtInt(doc.stats.n_chunks) + " (" +
         (doc.stats.align_rate * 100).toFixed(1) + "%)", "ok");
@@ -406,6 +436,7 @@
       }
       badges.push("<span class='badge badge-align " + escapeHtml(chunk.align) + "'>" +
         escapeHtml(ALIGN_LABEL[chunk.align] || chunk.align) + "</span>");
+      if (chunk.manual) badges.push("<span class='badge badge-manual'>手工</span>");
       head.innerHTML = "<span class='chunk-seq'>#" + (index + 1) + "</span>" + badges.join("");
       card.appendChild(head);
 
@@ -421,6 +452,36 @@
         "<span class='chunk-span'>" + spanText + "</span>" +
         "<span>" + fmtInt(chunk.token_len) + " 字符</span>";
       card.appendChild(foot);
+
+      var ops = document.createElement("div");
+      ops.className = "chunk-ops";
+      var isFirst = index === 0;
+      var isLast = index === doc.chunks.length - 1;
+      var actions = [
+        { act: "split", label: "✂ 拆", title: "把这块拆成两块（Ctrl+Enter）" },
+        { act: "merge-prev", label: "⤴ 并↑", title: "与上一块合并", disabled: isFirst },
+        { act: "merge-next", label: "⤵ 并↓", title: "与下一块合并", disabled: isLast },
+        { act: "drop", label: "✕ 删", title: "删除这块（Delete）" },
+        { act: "edit", label: "✎ 改", title: "编辑正文 / 条号 / 类型" }
+      ];
+      actions.forEach(function (action) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip";
+        btn.textContent = action.label;
+        btn.title = action.title;
+        if (action.disabled) btn.disabled = true;
+        btn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          if (action.act === "split") openSplit(chunk);
+          else if (action.act === "merge-prev") mergeChunk(chunk, "prev");
+          else if (action.act === "merge-next") mergeChunk(chunk, "next");
+          else if (action.act === "drop") dropChunk(chunk);
+          else if (action.act === "edit") openEdit(chunk);
+        });
+        ops.appendChild(btn);
+      });
+      card.appendChild(ops);
 
       card.addEventListener("click", function () { selectChunk(chunk, { scrollSource: true, scrollCard: false }); });
       frag.appendChild(card);
@@ -700,6 +761,249 @@
     document.addEventListener("selectionchange", scheduleSelectionCheck);
   }
 
+  // ---------- P2：人工编辑（拆 / 并 / 删 / 增 / 改 + 撤销重做） ----------
+  var CHUNK_KINDS = ["clause", "table", "appendix", "paragraph", "stub", "front", "title"];
+
+  function fillKind(select, value) {
+    select.innerHTML = "";
+    CHUNK_KINDS.forEach(function (kind) {
+      var opt = document.createElement("option");
+      opt.value = kind;
+      opt.textContent = kind + "（" + (KIND_LABEL[kind] || kind) + "）";
+      select.appendChild(opt);
+    });
+    select.value = CHUNK_KINDS.indexOf(value) >= 0 ? value : "paragraph";
+  }
+
+  function syncEditUI(doc) {
+    var edits = (doc && doc.edits) || { n_ops: 0, undo: 0, redo: 0 };
+    var diff = (doc && doc.diff) || { added: 0, modified: 0, removed: 0 };
+    var dirty = !!(doc && doc.dirty);
+    el.btnUndo.disabled = !edits.undo;
+    el.btnRedo.disabled = !edits.redo;
+    el.diff.textContent = "+" + diff.added + " ~" + diff.modified + " -" + diff.removed;
+    el.diff.classList.toggle("editing", dirty);
+    el.dirty.hidden = !dirty;
+    el.chunksHint.hidden = !dirty;
+    el.btnReset.disabled = !dirty;
+    el.chunksHint.textContent = dirty
+      ? ("手工修改只在内存里（共 " + edits.n_ops + " 条命令，可撤销）；刷新页面不丢，关服务才丢；P3 才落盘。")
+      : "";
+  }
+
+  // 编辑后重渲染，尽量保持滚动位置与选中切片
+  function applyDocPayload(doc) {
+    var activeId = state.activeChunk;
+    var sourceTop = el.source.scrollTop;
+    var chunksTop = el.chunks.scrollTop;
+    state.doc = doc;
+    state.docKey = doc.key;
+    state.activeChunk = null;
+    renderDocument(doc);
+    syncEditUI(doc);
+    el.source.scrollTop = sourceTop;
+    el.chunks.scrollTop = chunksTop;
+    if (activeId) {
+      var chunk = findChunk(activeId);
+      if (chunk) selectChunk(chunk, { scrollSource: false, scrollCard: false });
+    }
+    setStatus("已应用编辑 · " + fmtInt(doc.stats.n_chunks) + " 块 · 未保存（P3 落盘）", "ok");
+  }
+
+  function opFailed(err, errEl) {
+    var msg = "操作失败：" + err.message;
+    if (errEl) {
+      errEl.hidden = false;
+      errEl.textContent = err.message;
+      return;
+    }
+    showToast(msg, "err");
+    setStatus(msg, "err");
+  }
+
+  function postOp(op, okMsg) {
+    if (!state.docKey) return;
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      applyDocPayload(doc);
+      if (okMsg) showToast(okMsg, "ok");
+    }).catch(function (err) {
+      opFailed(err, state.opErrEl);
+    });
+  }
+
+  function postEditCmd(url, okMsg) {
+    if (!state.docKey) return;
+    postJSON(url, { key: state.docKey }).then(function (doc) {
+      applyDocPayload(doc);
+      if (okMsg) showToast(okMsg, "ok");
+    }).catch(function (err) {
+      opFailed(err);
+    });
+  }
+
+  function doUndo() {
+    if (!state.doc || !state.doc.edits || !state.doc.edits.undo) return;
+    postEditCmd("/api/undo", "已撤销");
+  }
+
+  function doRedo() {
+    if (!state.doc || !state.doc.edits || !state.doc.edits.redo) return;
+    postEditCmd("/api/redo", "已重做");
+  }
+
+  function doReset() {
+    if (!state.doc || !state.doc.dirty) return;
+    if (!window.confirm("丢弃本文件的全部手工修改，回到自动切块结果？")) return;
+    postEditCmd("/api/reset", "已重置到自动切块结果");
+  }
+
+  function dropChunk(chunk) {
+    if (!chunk) return;
+    state.activeChunk = null;
+    postOp({ op: "drop", id: chunk.id }, "已删除 " + chunk.id + "（Ctrl+Z 可撤销）");
+  }
+
+  function mergeChunk(chunk, direction) {
+    if (!state.doc) return;
+    var chunks = state.doc.chunks;
+    var index = chunks.indexOf(chunk);
+    var withChunk = direction === "prev" ? chunks[index - 1] : chunks[index + 1];
+    if (!withChunk) return;
+    postOp({ op: "merge", id: chunk.id, with: withChunk.id }, "已合并 " + chunk.id + " 与 " + withChunk.id);
+  }
+
+  function openSplit(chunk) {
+    if (!chunk) return;
+    var body = String(chunk.chunk || "");
+    var lines = body.split("\n");
+    state.pendingChunk = chunk;
+    state.opErrEl = el.splitErrors;
+    el.splitErrors.hidden = true;
+    el.splitErrors.textContent = "";
+    el.splitTarget.textContent = chunk.id + " · " + (KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind);
+    el.splitLines.innerHTML = "";
+    if (lines.length > 1) {
+      el.splitCharRow.hidden = true;
+      for (var k = 1; k < lines.length; k++) {
+        var label = document.createElement("label");
+        label.className = "split-line-opt";
+        var radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "split-at";
+        radio.value = String(k);
+        if (k === 1) radio.checked = true;
+        var text = document.createElement("span");
+        text.textContent = "在第 " + k + " 行之后切开（上半 " + k + " 行，下半 " + (lines.length - k) + " 行）";
+        label.appendChild(radio);
+        label.appendChild(text);
+        el.splitLines.appendChild(label);
+      }
+    } else {
+      el.splitCharRow.hidden = false;
+      el.splitLines.innerHTML = "<div class='hint'>本块只有一行，按字符位置切开。</div>";
+      var mid = Math.max(1, Math.floor(body.length / 2));
+      el.splitChar.value = String(mid);
+      el.splitChar.max = String(Math.max(1, body.length - 1));
+    }
+    el.splitDialog.showModal();
+  }
+
+  function submitSplit(ev) {
+    ev.preventDefault();
+    var chunk = state.pendingChunk;
+    if (!chunk) return;
+    var op = { op: "split", id: chunk.id };
+    var lines = String(chunk.chunk || "").split("\n");
+    if (lines.length > 1) {
+      var checked = el.splitLines.querySelector("input[name=split-at]:checked");
+      if (!checked) return;
+      op.at_line = parseInt(checked.value, 10);
+    } else {
+      var atChar = parseInt(el.splitChar.value, 10);
+      if (!isFinite(atChar)) { opFailed({ message: "请输入切分字符位置" }, el.splitErrors); return; }
+      op.at_char = atChar;
+    }
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      el.splitDialog.close();
+      applyDocPayload(doc);
+      showToast("已拆分 " + chunk.id, "ok");
+    }).catch(function (err) {
+      opFailed(err, el.splitErrors);
+    });
+  }
+
+  function openEdit(chunk) {
+    if (!chunk) return;
+    state.pendingChunk = chunk;
+    state.opErrEl = el.editErrors;
+    el.editErrors.hidden = true;
+    el.editErrors.textContent = "";
+    el.editTarget.textContent = chunk.id + " · " + (chunk.span
+      ? "原文第 " + chunk.span[0] + "–" + chunk.span[1] + " 行"
+      : "未对齐");
+    el.editText.value = chunk.chunk;
+    el.editLawNum.value = chunk.law_num || "";
+    fillKind(el.editKind, chunk.chunk_kind);
+    el.editDialog.showModal();
+  }
+
+  function submitEdit(ev) {
+    ev.preventDefault();
+    var chunk = state.pendingChunk;
+    if (!chunk) return;
+    var op = { op: "patch", id: chunk.id };
+    var text = el.editText.value;
+    var lawNum = el.editLawNum.value.trim();
+    var kind = el.editKind.value;
+    if (text !== chunk.chunk) op.chunk = text;
+    if (lawNum !== chunk.law_num) op.law_num = lawNum;
+    if (kind !== chunk.chunk_kind) op.chunk_kind = kind;
+    if (Object.keys(op).length === 1) {
+      el.editDialog.close();
+      showToast("没有修改", "warn");
+      return;
+    }
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      el.editDialog.close();
+      applyDocPayload(doc);
+      showToast("已修改 " + chunk.id, "ok");
+    }).catch(function (err) {
+      opFailed(err, el.editErrors);
+    });
+  }
+
+  function openAdd() {
+    if (!state.doc) { showToast("先打开一个文件", "warn"); return; }
+    state.opErrEl = el.addErrors;
+    el.addErrors.hidden = true;
+    el.addErrors.textContent = "";
+    el.addText.value = "";
+    el.addLawNum.value = "";
+    fillKind(el.addKind, "paragraph");
+    state.addAfterId = state.activeChunk || null;
+    el.addDialog.showModal();
+  }
+
+  function submitAdd(ev) {
+    ev.preventDefault();
+    var text = el.addText.value;
+    if (!text.trim()) { opFailed({ message: "正文不能为空" }, el.addErrors); return; }
+    var op = {
+      op: "add",
+      text: text,
+      law_num: el.addLawNum.value.trim(),
+      chunk_kind: el.addKind.value
+    };
+    if (state.addAfterId) op.after_id = state.addAfterId;
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      el.addDialog.close();
+      applyDocPayload(doc);
+      showToast("已新增一块", "ok");
+    }).catch(function (err) {
+      opFailed(err, el.addErrors);
+    });
+  }
+
   // ---------- 设置 ----------
   function openSettings() {
     var cfg = (state.data && state.data.ok !== false) ? (state.data.config || state.config) : (state.config || {});
@@ -816,11 +1120,62 @@
         try { window.localStorage.setItem("sca.lanes", laneToggle.checked ? "1" : "0"); } catch (e) { /* 忽略 */ }
       });
     }
+    // P2 编辑：按钮 + 弹层
+    el.btnUndo.addEventListener("click", doUndo);
+    el.btnRedo.addEventListener("click", doRedo);
+    el.btnReset.addEventListener("click", doReset);
+    el.btnAdd.addEventListener("click", openAdd);
+    el.splitForm.addEventListener("submit", submitSplit);
+    el.editForm.addEventListener("submit", submitEdit);
+    el.addForm.addEventListener("submit", submitAdd);
+    Array.prototype.forEach.call(document.querySelectorAll(".btn-cancel-op"), function (btn) {
+      btn.addEventListener("click", function () {
+        [el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
+          if (dlg && dlg.open) dlg.close();
+        });
+      });
+    });
     document.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape" && el.dialog.open) el.dialog.close();
-      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {
+      var tag = (ev.target && ev.target.tagName) || "";
+      var typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+        !!(ev.target && ev.target.isContentEditable);
+      var mod = ev.ctrlKey || ev.metaKey;
+      var key = String(ev.key || "").toLowerCase();
+      if (ev.key === "Escape") {
+        [el.dialog, el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
+          if (dlg && dlg.open) dlg.close();
+        });
+        return;
+      }
+      if (mod && key === "k") {
         ev.preventDefault();
         el.search.focus();
+        return;
+      }
+      if (typing) return;
+      if (mod && !ev.shiftKey && key === "z") {
+        ev.preventDefault();
+        doUndo();
+        return;
+      }
+      if (mod && (key === "y" || (ev.shiftKey && key === "z"))) {
+        ev.preventDefault();
+        doRedo();
+        return;
+      }
+      if (mod && ev.shiftKey && key === "n") {
+        ev.preventDefault();
+        openAdd();
+        return;
+      }
+      if (mod && key === "enter" && state.activeChunk) {
+        ev.preventDefault();
+        openSplit(findChunk(state.activeChunk));
+        return;
+      }
+      if (key === "delete" && state.activeChunk) {
+        ev.preventDefault();
+        dropChunk(findChunk(state.activeChunk));
       }
     });
     bindDocEvents();

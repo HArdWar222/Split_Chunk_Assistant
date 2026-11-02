@@ -14,6 +14,12 @@
       <span class="phase" id="phase">P1</span>
     </div>
     <div class="status" id="status">加载中…</div>
+    <div class="edit-tools">
+      <span class="dirty" id="dirty" hidden>● 未保存</span>
+      <span class="diff" id="diff" title="相对自动切块基线：+ 新增 ~ 修改 - 删除">+0 ~0 -0</span>
+      <button id="btn-undo" type="button" class="btn" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
+      <button id="btn-redo" type="button" class="btn" title="重做（Ctrl+Shift+Z）" disabled>↷ 重做</button>
+    </div>
     <div class="actions">
       <button id="btn-refresh" type="button" class="btn">刷新</button>
       <button id="btn-settings" type="button" class="btn">⚙ 设置</button>
@@ -52,7 +58,14 @@
       <header class="pane-head">
         <div class="pane-title">切片 <span class="count" id="chunk-count"></span></div>
         <div class="pane-meta" id="chunk-meta"></div>
+        <div class="pane-actions">
+          <button id="btn-add" type="button" class="btn btn-small" title="在选中切片之后新增一块（Ctrl+Shift+N）">＋ 新增</button>
+          <button id="btn-reset" type="button" class="btn btn-small" title="丢弃本文件的全部手工修改，回到自动切块结果">↺ 重置</button>
+        </div>
       </header>
+      <div class="chunks-hint" id="chunks-hint" hidden>
+        手工修改只在内存里（刷新页面不丢，关服务才丢）；P3 才落盘。Ctrl+Z 可撤销。
+      </div>
       <div class="chunks" id="chunks">
         <div class="empty"><p>尚未选择文件。</p></div>
       </div>
@@ -89,6 +102,74 @@
       <div class="dialog-actions">
         <button type="button" id="btn-cancel" class="btn">取消</button>
         <button type="submit" id="btn-save" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="split-dialog" class="dialog op-dialog">
+    <form method="dialog" id="split-form">
+      <h2>✂ 拆分切片</h2>
+      <p class="hint">选择在<b>哪一行之前</b>切开：上半块保留原 id，下半块获得新 id（max_seq+1）。
+        单行块按字符位置拆。</p>
+      <div class="op-target" id="split-target"></div>
+      <div class="split-lines" id="split-lines"></div>
+      <label class="field" id="split-char-row" hidden>
+        <span>切分字符位置 <code>at_char</code>（1 ~ 正文长度-1）</span>
+        <input id="split-char" type="number" min="1" step="1">
+      </label>
+      <div class="dialog-errors" id="split-errors" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-split-ok" class="btn btn-primary">确认拆分</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-dialog" class="dialog op-dialog">
+    <form method="dialog" id="edit-form">
+      <h2>✎ 编辑切片</h2>
+      <p class="hint">改正文会重算 <code>token_len</code> / <code>chunk_hash</code> 并标记 manual，与原文区间脱钩。</p>
+      <div class="op-target" id="edit-target"></div>
+      <label class="field">
+        <span>正文 <code>chunk</code></span>
+        <textarea id="edit-text" rows="10" spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span>条号 / 表号 <code>law_num</code></span>
+        <input id="edit-law-num" type="text" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>类型 <code>chunk_kind</code></span>
+        <select id="edit-kind"></select>
+      </label>
+      <div class="dialog-errors" id="edit-errors" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-edit-ok" class="btn btn-primary">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="add-dialog" class="dialog op-dialog">
+    <form method="dialog" id="add-form">
+      <h2>＋ 新增切片</h2>
+      <p class="hint">插入到当前选中切片之后（未选中则追加到末尾），id = 当前最大 seq+1。</p>
+      <label class="field">
+        <span>正文 <code>chunk</code></span>
+        <textarea id="add-text" rows="8" spellcheck="false" placeholder="粘贴或输入要新增的块正文…"></textarea>
+      </label>
+      <label class="field">
+        <span>条号 / 表号 <code>law_num</code></span>
+        <input id="add-law-num" type="text" spellcheck="false" placeholder="留空则填「（新增）」">
+      </label>
+      <label class="field">
+        <span>类型 <code>chunk_kind</code></span>
+        <select id="add-kind"></select>
+      </label>
+      <div class="dialog-errors" id="add-errors" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-add-ok" class="btn btn-primary">新增</button>
       </div>
     </form>
   </dialog>

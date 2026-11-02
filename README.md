@@ -6,14 +6,17 @@
 原文（Markdown）与切片（chunk）双向联动，支持人工 `split / merge / drop / add / 改字`，
 支持调整切分参数后重切，人工修改写入覆盖层，导出仍然是原来的 **15 字段契约**。
 
-**当前状态：P1 已实现（2026-11-03）** —— 「原文 ↔ 切片」三栏只读联动可用：
-左文件树、中原文 Markdown 源码行（行号/节标题/表格行）、右切片卡片；hover/click 双向高亮，
-**在原文里拖选一段文字，右侧覆盖该范围的切片会被高亮**（状态栏显示「原文第 a–b 行 → 对应 N 个切片」），
-**原文左侧彩色竖条（范围条）直接标出每个切片覆盖的行区间**——悬停看切片 id 与行范围，点击选中，
-同一行被多个切片覆盖时多条竖条并存、可一键开关（偏好存 localStorage），
-卡片底部也显示 `第 a–b 行`，深链 `#doc=<key>` 可分享定位；对齐状态如实分档（exact / substr / table_rows / table_label / miss）。
-首批验收目标「消防法 74/74」达成；全语料 12 718 块中 12 251 块可定位（96.3%）。
-下一步是 P2 人工编辑（split / merge / drop / add / 改字 + 撤销 + diff）。
+**当前状态：P2 已实现（2026-11-03）** —— P1 的「原文 ↔ 切片」三栏只读联动之上，已支持人工编辑：
+
+- 每个切片的卡片底部有 **拆 / 并↑ / 并↓ / 删 / 改** 五个操作（首尾块的「并」自动禁用）；
+- 顶部工具栏：**未保存徽章**、**diff 计数 `+新增 ~修改 -删除`**、**撤销 / 重做**、切片面板 **新增 / 重置**；
+- 拆分支持 **行级（多行块给行单选）** 与 **字符级（单行块给字符位置）**；合并必须相邻、保留前者 id；
+- 手改过的正文标 `manual` 徽章、`align = manual`，派生字段（`token_len` / `chunk_hash`）自动重算；
+- 快捷键：`Ctrl+Z` 撤销、`Ctrl+Y / Ctrl+Shift+Z` 重做、`Ctrl+Shift+N` 新增、`Ctrl+Enter` 拆当前块、`Delete` 删当前块、`Ctrl+K` 搜索、`Esc` 关弹层；
+- P2 的编辑只在内存（按文件隔离、按会话隔离），刷新页面回到基线；**P3 才落盘**。
+
+P1 的只读能力（三栏联动、拖选反查、原文左侧范围条、深链 `#doc=<key>`、对齐如实分档 exact / substr / table_rows / table_label / miss）
+全部保留。首批验收目标「消防法 74/74」达成；全语料 12 718 块中 12 251 块可定位（96.3%）。
 
 ---
 
@@ -82,7 +85,7 @@ SplitChunkAssistant 把「自动切块」变成「可人工复核与修正的切
 
 ---
 
-## 快速开始（P1 可用）
+## 快速开始（P2 可用）
 
 ```bat
 :: 前提：本机已装 Python 3.10+，且 FAC-RAG 位于本仓库的兄弟目录
@@ -101,6 +104,8 @@ python -m chunk_studio.server --port 8790 --open
 - 右侧是切片卡片（15 字段摘要 + extras + 对齐状态），顶部显示 `对齐 N/N (率) · 各档计数`；
 - hover 卡片 → 原文行淡高亮；hover 原文行 → 关联卡片标记；click 卡片 → 滚动并强高亮对应原文行；
 - 地址栏形如 `#doc=national_laws%2F中华人民共和国消防法`，可直接收藏/分享定位；
+- 卡片底部有 `拆 / 并↑ / 并↓ / 删 / 改` 操作；弹层里填拆分位置 / 改正文与条号 / 新增正文；
+- 顶部 `+a ~m -r` 是相对基线的 diff，`未保存` 徽章表示有内存编辑，撤销/重做可逐步回退；
 - 「⚙ 设置」可改 `chunks_dir` / `fac_root` / 端口 / 各分组源目录，保存即生效。
 
 首次运行会在仓库根目录生成 `config.json`（已 gitignore）：
@@ -117,12 +122,14 @@ python -m chunk_studio.server --port 8790 --open
 P1 的验收口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 65 个测试
+python -m unittest discover -s tests -t . -v   :: 92 个测试
 ```
 
 - `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60
 - `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
 - 消防法：411 行 / 74 块 / 对齐 **74/74（100%）**
+- P2 编辑：`POST /api/op`（split / merge / drop / add / patch）、`/api/undo`、`/api/redo`、`/api/reset`；
+  拆分后块数 +1、diff 同步、新块 id = 该文件最大序号 +1（不回填已删编号）
 - 静态页 `/`、`/static/app.js`、`/static/style.css` 均可直出
 
 全语料对齐实测（2026-11-03，`align_chunks`）：

@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import __phase__, __version__
 from .config import ConfigError
 from .manifest import ManifestError, SourceMissingError
+from .ops import OpError, OpNotFound
 from .studio import Studio
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -55,6 +56,10 @@ class App:
             return self._route(method, path, query, body)
         except ApiError as exc:
             return _json({"ok": False, "error": exc.message}, exc.status)
+        except OpNotFound as exc:
+            return _json({"ok": False, "error": str(exc)}, 404)
+        except OpError as exc:
+            return _json({"ok": False, "error": str(exc)}, 400)
         except ConfigError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
         except ManifestError as exc:
@@ -97,6 +102,19 @@ class App:
                 raise ApiError(404, str(exc)) from None
             except ManifestError as exc:
                 raise ApiError(404, str(exc)) from None
+
+        if method == "POST" and path in {"/api/op", "/api/undo", "/api/redo", "/api/reset"}:
+            data = self._read_json(body)
+            key = str(data.get("key") or "").strip()
+            if not key:
+                raise ApiError(400, "缺少 key 参数")
+            if path == "/api/op":
+                return _json(self.studio.apply_op(key, data.get("op")))
+            if path == "/api/undo":
+                return _json(self.studio.undo_op(key))
+            if path == "/api/redo":
+                return _json(self.studio.redo_op(key))
+            return _json(self.studio.reset_edits(key))
 
         if method == "GET" and path in {"", "/", "/index.html"}:
             return self._static_file("index.html")

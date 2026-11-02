@@ -47,7 +47,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         self.assertEqual(data["app"], "SplitChunkAssistant")
-        self.assertEqual(data["phase"], "P1")
+        self.assertEqual(data["phase"], "P2")
 
     # -- /api/files -------------------------------------------------
     def test_files(self):
@@ -163,6 +163,87 @@ class AppTest(unittest.TestCase):
         status, data = self.doc("national_laws/测试法")
         self.assertEqual(status, 200)
         self.assertEqual(len(data["chunks"]), 2)
+
+    # -- P2 编辑接口 -------------------------------------------------
+    KEY = "national_laws/测试法"
+
+    def apply_op(self, op):
+        return self.body(self.post("/api/op", {"key": self.KEY, "op": op}))
+
+    def test_op_split_then_doc(self):
+        status, data = self.apply_op({"op": "split", "id": "测试法-0001", "at_char": 4})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["dirty"])
+        self.assertEqual(len(data["chunks"]), 3)
+        self.assertEqual(data["diff"]["added"], 1)
+        self.assertGreaterEqual(data["diff"]["modified"], 1)
+        self.assertEqual(data["edits"]["n_ops"], 1)
+        self.assertFalse(data["edited"])
+        # 再取文档仍带编辑结果
+        status, again = self.doc(self.KEY)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(again["chunks"]), 3)
+        self.assertTrue(again["dirty"])
+
+    def test_op_unknown_chunk(self):
+        status, data = self.apply_op({"op": "drop", "id": "不存在-0001"})
+        self.assertEqual(status, 404)
+        self.assertFalse(data["ok"])
+
+    def test_op_bad_command(self):
+        status, data = self.apply_op({"op": "nope"})
+        self.assertEqual(status, 400)
+        self.assertIn("未知的编辑命令", data["error"])
+
+    def test_op_missing_key(self):
+        status, data = self.body(self.post("/api/op", {"op": {"op": "drop", "id": "测试法-0001"}}))
+        self.assertEqual(status, 400)
+
+    def test_op_patch(self):
+        status, data = self.apply_op({"op": "patch", "id": "测试法-0002", "chunk": "第二条 改过了。"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["diff"]["modified"], 1)
+        patched = [c for c in data["chunks"] if c["id"] == "测试法-0002"][0]
+        self.assertEqual(patched["chunk"], "第二条 改过了。")
+        self.assertTrue(patched["manual"])
+        self.assertEqual(patched["align"], "manual")
+
+    def test_op_add_and_drop(self):
+        status, data = self.apply_op({"op": "add", "text": "新增块正文", "chunk_kind": "paragraph"})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 3)
+        new = data["chunks"][-1]
+        self.assertEqual(new["id"], "测试法-0003")
+        self.assertEqual(new["law_num"], "（新增）")
+        status, data = self.apply_op({"op": "drop", "id": "测试法-0001"})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 2)
+        self.assertEqual(data["diff"]["removed"], 1)
+
+    def test_undo_redo(self):
+        self.apply_op({"op": "split", "id": "测试法-0001", "at_char": 4})
+        status, data = self.body(self.post("/api/undo", {"key": self.KEY}))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 2)
+        self.assertFalse(data["dirty"])
+        self.assertEqual(data["edits"]["redo"], 1)
+        status, data = self.body(self.post("/api/redo", {"key": self.KEY}))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 3)
+        self.assertTrue(data["dirty"])
+
+    def test_undo_empty(self):
+        status, data = self.body(self.post("/api/undo", {"key": self.KEY}))
+        self.assertEqual(status, 400)
+        self.assertIn("可撤销", data["error"])
+
+    def test_reset(self):
+        self.apply_op({"op": "split", "id": "测试法-0001", "at_char": 4})
+        status, data = self.body(self.post("/api/reset", {"key": self.KEY}))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["chunks"]), 2)
+        self.assertFalse(data["dirty"])
+        self.assertEqual(data["edits"]["n_ops"], 0)
 
     def test_index(self):
         status, ctype, raw = self.get("/")

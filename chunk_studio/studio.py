@@ -18,6 +18,7 @@ from .align import align_chunks, summarize_align
 from .config import Config, ConfigError
 from .fac_bridge import FacBridge
 from .manifest import ManifestError
+from .ops import OpError, apply_ops, chunk_diff
 from .source import (
     default_roots_from_manifest,
     display_text,
@@ -71,6 +72,9 @@ class Studio:
         self._error: str | None = None
         self._doc_cache: "OrderedDict[str, dict]" = OrderedDict()
         self._default_roots: dict[str, str] = {}
+        # P2 会话内编辑：key -> 命令列表；撤销 = 弹出并整体重放，不落盘（P3 才写覆盖层）
+        self._ops: dict[str, list[dict]] = {}
+        self._redo: dict[str, list[dict]] = {}
         self._init_bridge()
 
     # -- 内部 -----------------------------------------------------------
@@ -78,6 +82,8 @@ class Studio:
         self._bridge = None
         self._error = None
         self._doc_cache.clear()
+        self._ops.clear()
+        self._redo.clear()
         self._default_roots = {}
         try:
             bridge = FacBridge(self.cfg.chunks_dir)
@@ -149,9 +155,12 @@ class Studio:
             raise ConfigError(self._error or "改了配置后产物依然不可用")
         return self.config_payload()
 
-    # -- 单文件三栏载荷（P1） -------------------------------------------
-    def doc_payload(self, key: str) -> dict:
-        """原文行 + 切片 + 对齐结果。缓存最近 DOC_CACHE_SIZE 个文件。"""
+    # -- 单文件三栏载荷（P1 只读 + P2 会话内编辑） -----------------------
+    def _base_doc(self, key: str) -> dict:
+        """基线文档：源行 + 视图块 + 对齐，缓存最近 DOC_CACHE_SIZE 个文件。
+
+        基线永远是「产物里的原样」，任何编辑都不改它；每次请求在其上重放命令。
+        """
         if self._bridge is None:
             raise ManifestError(self._error or "切块产物不可用")
         cached = self._doc_cache.get(key)
@@ -189,21 +198,22 @@ class Studio:
                     # 前端用 1-based 闭区间
                     "span": [span[0] + 1, span[1]] if span else None,
                     "align": result["status"],
+                    "manual": False,
                 }
             )
 
-        stats = summarize_align(aligned)
+        base_stats = summarize_align(aligned)
         source_chars = sum(len(line) + 1 for line in lines)
-        stats.update(
+        base_stats.update(
             {
                 "n_lines": len(lines),
                 "n_chunks": len(chunks),
                 "source_chars": source_chars,
-                "align_rate": round(stats["n_aligned"] / len(chunks), 4) if chunks else 0.0,
+                "align_rate": round(base_stats["n_aligned"] / len(chunks), 4) if chunks else 0.0,
             }
         )
 
-        payload = {
+        base = {
             "ok": True,
             "key": key,
             "group": entry.group,
@@ -212,7 +222,7 @@ class Studio:
             "source_chars": source_chars,
             "lines": out_lines,
             "chunks": out_chunks,
-            "stats": stats,
+            "stats": base_stats,
             "manifest": {
                 "n_chunks": entry.n_chunks,
                 "gate_ok": entry.gate_ok,
@@ -223,9 +233,90 @@ class Studio:
                 "jsonl": entry.jsonl,
                 "path": entry.source_path,
             },
-            "edited": False,
         }
-        self._doc_cache[key] = payload
+        self._doc_cache[key] = base
         while len(self._doc_cache) > DOC_CACHE_SIZE:
             self._doc_cache.popitem(last=False)
+        return base
+
+    @staticmethod
+    def _restat(chunks: list[dict], base_stats: dict) -> dict:
+        """按当前块列表重算对齐统计（新增/手工块不再计入已对齐）。"""
+        kinds: dict[str, int] = {}
+        aligned = 0
+        for chunk in chunks:
+            status = str(chunk.get("align") or "miss")
+            kinds[status] = kinds.get(status, 0) + 1
+            if chunk.get("span"):
+                aligned += 1
+        stats = dict(base_stats)
+        stats.update(
+            {
+                "n_chunks": len(chunks),
+                "n_aligned": aligned,
+                "n_miss": kinds.get("miss", 0),
+                "align_kinds": kinds,
+                "align_rate": round(aligned / len(chunks), 4) if chunks else 0.0,
+            }
+        )
+        return stats
+
+    def doc_payload(self, key: str) -> dict:
+        """基线 + 会话内编辑命令重放后的三栏载荷。"""
+        base = self._base_doc(key)
+        ops = list(self._ops.get(key) or [])
+        if ops:
+            chunks = apply_ops(base["chunks"], ops, law_name=base["law_name"])
+        else:
+            chunks = base["chunks"]
+        payload = dict(base)
+        payload["chunks"] = chunks
+        payload["stats"] = self._restat(chunks, base["stats"])
+        payload["edited"] = False  # P3 覆盖层
+        payload["dirty"] = bool(ops)
+        payload["diff"] = chunk_diff(base["chunks"], chunks)
+        payload["edits"] = {
+            "n_ops": len(ops),
+            "undo": len(ops),
+            "redo": len(self._redo.get(key) or []),
+        }
         return payload
+
+    # -- P2 编辑命令 -----------------------------------------------------
+    def apply_op(self, key: str, op: dict) -> dict:
+        """校验并追加一条编辑命令，返回重放后的完整文档载荷。"""
+        if not isinstance(op, dict):
+            raise OpError("op 必须是 JSON 对象")
+        base = self._base_doc(key)
+        candidate = list(self._ops.get(key) or []) + [op]
+        apply_ops(base["chunks"], candidate, law_name=base["law_name"])  # 只做校验
+        self._ops[key] = candidate
+        self._redo[key] = []
+        return self.doc_payload(key)
+
+    def undo_op(self, key: str) -> dict:
+        base = self._base_doc(key)
+        ops = list(self._ops.get(key) or [])
+        if not ops:
+            raise OpError("没有可撤销的编辑")
+        last = ops.pop()
+        self._redo.setdefault(key, []).append(last)
+        self._ops[key] = ops
+        return self.doc_payload(key)
+
+    def redo_op(self, key: str) -> dict:
+        base = self._base_doc(key)
+        redo = list(self._redo.get(key) or [])
+        if not redo:
+            raise OpError("没有可重做的编辑")
+        op = redo.pop()
+        self._redo[key] = redo
+        self._ops.setdefault(key, []).append(op)
+        return self.doc_payload(key)
+
+    def reset_edits(self, key: str) -> dict:
+        """丢弃本文件全部会话内编辑（P3 起会删除覆盖层）。"""
+        self._base_doc(key)  # 校验 key 存在
+        self._ops.pop(key, None)
+        self._redo.pop(key, None)
+        return self.doc_payload(key)
