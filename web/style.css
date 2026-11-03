@@ -832,11 +832,19 @@ body.no-lanes .line .lanes { display: none; }
 .grid-table tbody tr.row-gap:hover td {
   background: rgba(245, 158, 11, 0.14);
 }
-/* 选中的表格行（拖选 / 单击未切片行） */
+/* 选中的表格行（整行行选择器：拖动 / Shift 连选） */
+.grid-table tbody tr { user-select: none; }
 .grid-table tbody tr.sel-row td {
-  background: #fff7e0;
+  background: rgba(245, 158, 11, 0.20) !important;
   box-shadow: inset 0 0 0 1px #f59e0b;
 }
+.grid-table tbody tr.sel-row td:first-child {
+  border-left: 3px solid #ea580c;
+}
+.grid-table tbody tr.sel-row + tr.sel-row td { box-shadow: none; }
+body.row-picking,
+body.row-picking .grid-table tbody tr { cursor: row-resize; }
+body.row-picking { user-select: none; }
 
 /* 切片卡片里的表格正文容器 */
 .chunk-content { margin: 6px 0 4px; }

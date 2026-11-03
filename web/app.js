@@ -28,6 +28,12 @@
     addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
     addSpan: null,     // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
     selTableRows: [],  // 当前选中的表格行（未切片/已切片都算，供「用这些行新增切片」）
+    rowPick: null,     // 表格行选区 {blockEl, from, to, rows, block, chunkRows}（P2 行选择器）
+    rowPickAnchor: null, // 下次 Shift+点击 扩展的锚点 {blockEl, anchor}
+    rowPickDrag: false,  // 是否正在拖动选行
+    rowPickMoved: false, // 本次按下后是否真的拖动过
+    suppressNextClick: false, // 拖选/Shift 选行后吞掉紧随其后的 click
+    rowPickClick: false,      // 本次 mousedown 是否是「单击」（未按 Shift）
     programmaticScroll: 0 // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
   };
 
@@ -429,6 +435,148 @@
     return null;
   }
 
+  // ---------- 表格行选择器（P2）：整行选择，不再依赖浏览器文字选区 ----------
+  function tableRowsOf(blockEl) {
+    if (!blockEl) return [];
+    return blockEl._tableRows || blockEl.querySelectorAll("tbody tr");
+  }
+
+  function clearRowPickMarks() {
+    (state.selTableRows || []).forEach(function (tr) {
+      if (tr && tr.classList) tr.classList.remove("sel-row");
+    });
+    state.selTableRows = [];
+    state.rowPick = null;
+  }
+
+  // 把 anchor..head 范围内的表格行整行标成 sel-row，并更新状态栏
+  function applyRowPick(blockEl, anchorIdx, headIdx) {
+    if (!blockEl || !state.doc) return null;
+    var rows = tableRowsOf(blockEl);
+    if (!rows.length) return null;
+    var maxIdx = rows.length - 1;
+    anchorIdx = Math.max(0, Math.min(maxIdx, anchorIdx));
+    headIdx = Math.max(0, Math.min(maxIdx, headIdx));
+    clearSelectionMarks();
+    var from = Math.min(anchorIdx, headIdx);
+    var to = Math.max(anchorIdx, headIdx);
+    var picked = [];
+    var chunkRows = 0;
+    for (var i = from; i <= to; i++) {
+      rows[i].classList.add("sel-row");
+      picked.push(rows[i]);
+      if (rows[i].dataset.chunk !== undefined) chunkRows++;
+    }
+    state.selTableRows = picked;
+    var block = tableBlockAt(parseInt(blockEl.dataset.line, 10));
+    state.rowPick = {
+      blockEl: blockEl,
+      block: block,
+      anchor: anchorIdx,
+      head: headIdx,
+      from: from + 1,
+      to: to + 1,
+      rows: picked,
+      chunkRows: chunkRows
+    };
+    var label = from === to
+      ? ("表格内第 " + (from + 1) + " 行")
+      : ("表格内第 " + (from + 1) + "–" + (to + 1) + " 行");
+    if (chunkRows === 0) {
+      setStatus(label + " · 未切片（" + picked.length + " 行）· 右键可「用这些行新增切片」", "warn");
+    } else if (chunkRows === picked.length) {
+      setStatus(label + " · 已选 " + picked.length + " 行（都有切片）· 右键可合并 / 删除", "ok");
+    } else {
+      setStatus(label + " · 已选 " + picked.length + " 行（" + chunkRows + " 行有切片）· 右键可操作", "ok");
+    }
+    return state.rowPick;
+  }
+
+  // 当前行选区 → 供右键菜单 / 新增使用的结构（无行选区返回 null）
+  function rowPickPayload() {
+    var rp = state.rowPick;
+    if (!rp || !rp.block) return null;
+    var text = rp.rows.map(function (tr) {
+      var cells = [];
+      for (var c = 0; c < tr.cells.length; c++) cells.push(String(tr.cells[c].innerText || "").trim());
+      return cells.join("\t");
+    }).join("\n");
+    var chunks = [];
+    rp.rows.forEach(function (tr) {
+      if (tr.dataset.chunk === undefined) return;
+      var chunk = state.doc.chunks[parseInt(tr.dataset.chunk, 10)];
+      if (chunk && chunks.indexOf(chunk) < 0) chunks.push(chunk);
+    });
+    return {
+      block: rp.block,
+      blockEl: rp.blockEl,
+      from: rp.from,
+      to: rp.to,
+      rows: rp.rows,
+      text: text,
+      allGap: rp.chunkRows === 0,
+      chunkRows: rp.chunkRows,
+      chunks: chunks
+    };
+  }
+
+  function hideRowPick(keepAnchor) {
+    clearRowPickMarks();
+    if (!keepAnchor) state.rowPickAnchor = null;
+    state.rowPickDrag = false;
+    state.rowPickMoved = false;
+    state.rowPickClick = false;
+    if (document.body) document.body.classList.remove("row-picking");
+  }
+
+  // 拖动选行：跟随鼠标取行，靠近表格容器上下边缘时自动滚动
+  function startRowPickTracking(blockEl) {
+    var wrap = blockEl.querySelector(".tblwrap");
+    state.rowPickMoved = false;
+    function onMove(ev) {
+      if (!state.rowPickDrag || !state.rowPick) return;
+      state.rowPickMoved = true;
+      var rect = (wrap || blockEl).getBoundingClientRect();
+      var edge = 28;
+      var dy = 0;
+      if (ev.clientY < rect.top + edge) dy = -Math.ceil((rect.top + edge - ev.clientY) / 3);
+      else if (ev.clientY > rect.bottom - edge) dy = Math.ceil((ev.clientY - (rect.bottom - edge)) / 3);
+      if (wrap && dy) {
+        wrap.scrollTop += Math.max(-16, Math.min(16, dy));
+        rect = wrap.getBoundingClientRect();
+      }
+      var clampedY = Math.max(rect.top + 2, Math.min(rect.bottom - 2, ev.clientY));
+      var tr = tableRowAtPoint(blockEl, ev.clientX, clampedY);
+      if (!tr) return;
+      var rows = tableRowsOf(blockEl);
+      var idx = Array.prototype.indexOf.call(rows, tr);
+      if (idx < 0) return;
+      if (state.rowPick && idx === state.rowPick.head) return;
+      applyRowPick(blockEl, state.rowPick.anchor, idx);
+      state.rowPick.head = idx;
+    }
+    function onUp() {
+      state.rowPickDrag = false;
+      document.body.classList.remove("row-picking");
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onUp, true);
+      var picked = state.rowPick && state.rowPick.rows[0];
+      var clickedChunk = picked && picked.dataset.chunk !== undefined && !state.rowPickMoved && state.rowPickClick;
+      if (clickedChunk) {
+        // 单纯点击（没拖动）已切片行：交给 click 处理为「选中该切片」，不保留行选区
+        if (state.rowPick) { state.rowPick.rows.forEach(function (tr) { tr.classList.remove("sel-row"); }); }
+        state.selTableRows = [];
+        state.rowPick = null;
+        state.suppressNextClick = false;
+      } else {
+        state.suppressNextClick = true;
+      }
+      state.rowPickClick = false;
+    }
+    document.addEventListener("mousemove", onMove, true);
+    document.addEventListener("mouseup", onUp, true);
+  }
+
   function getJSON(url) {
     return fetch(url, { headers: { "Accept": "application/json" } }).then(function (resp) {
       return resp.json().then(function (body) {
@@ -615,6 +763,7 @@
 
   function loadDoc(file) {
     hideSplitCaret();
+    hideRowPick();
     var seq = (loadDoc._seq = (loadDoc._seq || 0) + 1);
     state.tables = null;
     setStatus("加载 " + file.law_name + " …");
@@ -655,6 +804,12 @@
     state.tableRows = {};
     state.hlRows = [];
     state.rowActive = [];
+    // 原文 DOM 重建，行选区/锚点失效
+    state.rowPick = null;
+    state.rowPickAnchor = null;
+    state.rowPickDrag = false;
+    state.rowPickMoved = false;
+    state.selTableRows = [];
     renderSource(doc);
     renderChunks(doc);
     renderDocMeta(doc);
@@ -1182,6 +1337,9 @@
   // 选区落在渲染出来的表格行上 → { block, from, to, rows, text, allGap }
   // 表格行没有源行级坐标，所以 span 用整个表格块的行区间；正文用选中行的单元格文本。
   function selectedTableRows() {
+    // 新的行选择器优先：整行选区保存在 state.rowPick（不依赖浏览器文字选区）
+    var rp = rowPickPayload();
+    if (rp) return rp;
     var sel = window.getSelection ? window.getSelection() : null;
     if (!sel || sel.isCollapsed || !sel.rangeCount || !state.doc) return null;
     var range = sel.getRangeAt(0);
@@ -1495,6 +1653,8 @@
   }
 
   function applySelectionNow() {
+    // 行选区由 mousedown 拖动维护，不被原生 selectionchange 覆盖
+    if (state.rowPick) return;
     // 表格行选区（尤其是未切片行）：按表格行 mark，并提示可以右键新增切片
     var tbl = selectedTableRows();
     if (tbl) {
@@ -1597,6 +1757,7 @@
 
   function selectChunk(chunk, opts) {
     opts = opts || {};
+    hideRowPick(true); // 选中切片时清掉行高亮，但保留 Shift 连选的锚点
     if (state.activeChunk) {
       var prev = state.cardEls[state.activeChunk];
       if (prev) prev.classList.remove("active");
@@ -1679,6 +1840,8 @@
       clearRelatedCards();
     });
     el.source.addEventListener("click", function (ev) {
+      // 拖动选行 / Shift 连选后，浏览器仍会补一个 click：吞掉，避免把行选区变回「选中单个切片」
+      if (state.suppressNextClick) { state.suppressNextClick = false; return; }
       var bar = ev.target.closest(".lane");
       if (bar && bar.dataset.chunk !== undefined) {
         var hit = state.doc && state.doc.chunks[parseInt(bar.dataset.chunk, 10)];
@@ -1689,19 +1852,7 @@
       }
       var tblBlockEl = ev.target.closest(".line.table-block");
       var tblRow = tableRowAtPoint(tblBlockEl, ev.clientX, ev.clientY);
-      if (tblRow && tblRow.dataset.chunk === undefined) {
-        // 未切片的表格行：把这行内容设为选区，交给 applySelectionNow 统一标记与提示
-        var gSel = window.getSelection ? window.getSelection() : null;
-        if (gSel) {
-          var gRange = document.createRange();
-          gRange.selectNodeContents(tblRow);
-          gSel.removeAllRanges();
-          gSel.addRange(gRange);
-        }
-        scheduleSelectionCheck();
-        return;
-      }
-      if (tblRow) {
+      if (tblRow && tblRow.dataset.chunk !== undefined) {
         var tidx = parseInt(tblRow.dataset.chunk, 10);
         var tchunk = state.doc && state.doc.chunks[tidx];
         if (tchunk) {
@@ -1720,14 +1871,45 @@
     });
     // 拖选原文文字：选区覆盖的行 → 高亮对应切片
     el.source.addEventListener("mouseup", function () {
-      window.setTimeout(applySelectionNow, 0);
+      window.setTimeout(function () {
+        applySelectionNow();
+      }, 0);
     });
     document.addEventListener("selectionchange", scheduleSelectionCheck);
-    // 左键/右键按下时给出可见的拆分光标反馈（蓝色竖线 + 上方提示）
+    // 左键/右键按下：表格行 → 进入整行选择；其他位置 → 显示拆分光标反馈
     el.source.addEventListener("mousedown", function (ev) {
       if (ev.button !== 0 && ev.button !== 2) return;
       if (ev.target.closest(".lane")) return;
       if (ev.target.closest(".no")) { hideSplitCaret(); return; }
+      // 上一次拖动遗留的「吞 click」标记不能影响这次点击
+      state.suppressNextClick = false;
+      if (ev.button === 0) {
+        var pickBlockEl = ev.target.closest(".line.table-block");
+        if (pickBlockEl) {
+          var pickTr = tableRowAtPoint(pickBlockEl, ev.clientX, ev.clientY);
+          var pickRows = tableRowsOf(pickBlockEl);
+          var pickIdx = pickTr ? Array.prototype.indexOf.call(pickRows, pickTr) : -1;
+          if (pickIdx >= 0) {
+            ev.preventDefault(); // 阻止原生蓝色文字选区，只保留整行高亮
+            hideSplitCaret();
+            hideCtxMenu();
+            state.rowPickClick = !ev.shiftKey;
+            var pickAnchor = state.rowPickAnchor;
+            if (ev.shiftKey && pickAnchor && pickAnchor.blockEl === pickBlockEl) {
+              applyRowPick(pickBlockEl, pickAnchor.anchor, pickIdx);
+              state.suppressNextClick = true;
+            } else {
+              state.rowPickAnchor = { blockEl: pickBlockEl, anchor: pickIdx };
+              applyRowPick(pickBlockEl, pickIdx, pickIdx);
+            }
+            state.rowPickDrag = true;
+            state.rowPickMoved = false;
+            document.body.classList.add("row-picking");
+            startRowPickTracking(pickBlockEl);
+            return;
+          }
+        }
+      }
       showSplitCaret(ev);
     });
     // 右键：在原文选区/切片上弹出上下文工作栏
@@ -1837,24 +2019,24 @@
     var count = 0;
     var doc = state.doc;
 
-    // 表格行选区 / 右键落在未切片表格行 → 专用菜单：用这些行新增切片
-    var tblSel = selectedTableRows();
+    // 表格行选区：优先用「整行选择器」的选区；右键落在选区外的行时按该行自身的切片处理
+    var rpPayload = rowPickPayload();
+    var rowPickHit = false;
+    if (rpPayload && rowTr) rowPickHit = rpPayload.rows.indexOf(rowTr) >= 0;
+    var tblSel = rowPickHit ? rpPayload : null;
     var gapTrInfo = null;
-    if (!tblSel) {
-      var gapTr = ev.target && ev.target.closest ? ev.target.closest(".line.table-block tbody tr") : null;
-      if (gapTr && gapTr.dataset.chunk === undefined) {
-        var gapBlockEl = gapTr.closest(".line.table-block");
-        var gapBlock = gapBlockEl ? tableBlockAt(parseInt(gapBlockEl.dataset.line, 10)) : null;
-        if (gapBlock) {
-          var allGapRows = gapBlockEl.querySelectorAll("tbody tr");
-          var gapIdx = 1;
-          for (var gi = 0; gi < allGapRows.length; gi++) {
-            if (allGapRows[gi] === gapTr) { gapIdx = gi + 1; break; }
-          }
-          var gapCells = [];
-          for (var gc = 0; gc < gapTr.cells.length; gc++) gapCells.push(String(gapTr.cells[gc].innerText || "").trim());
-          gapTrInfo = { block: gapBlock, from: gapIdx, to: gapIdx, rows: [gapTr], text: gapCells.join("\t"), allGap: true };
+    if (!tblSel && !rpPayload && rowTr && rowTr.dataset.chunk === undefined) {
+      var gapBlockEl = rowTr.closest(".line.table-block");
+      var gapBlock = gapBlockEl ? tableBlockAt(parseInt(gapBlockEl.dataset.line, 10)) : null;
+      if (gapBlock) {
+        var allGapRows = gapBlockEl.querySelectorAll("tbody tr");
+        var gapIdx = 1;
+        for (var gi = 0; gi < allGapRows.length; gi++) {
+          if (allGapRows[gi] === rowTr) { gapIdx = gi + 1; break; }
         }
+        var gapCells = [];
+        for (var gc = 0; gc < rowTr.cells.length; gc++) gapCells.push(String(rowTr.cells[gc].innerText || "").trim());
+        gapTrInfo = { block: gapBlock, from: gapIdx, to: gapIdx, rows: [rowTr], text: gapCells.join("\t"), allGap: true, chunkRows: 0, chunks: [] };
       }
     }
     var rowSel = tblSel || gapTrInfo;
@@ -1862,30 +2044,59 @@
       var rowLabel = rowSel.from === rowSel.to
         ? ("表格内第 " + rowSel.from + " 行")
         : ("表格内第 " + rowSel.from + "–" + rowSel.to + " 行");
+      var selChunks = rowSel.chunks || [];
       el.ctxMenu.appendChild(ctxItem(
-        rowSel.allGap ? ("ℹ " + rowLabel + " 没有切片覆盖") : ("ℹ " + rowLabel + " · 已选 " + rowSel.rows.length + " 行"),
-        rowSel.allGap ? "未切片区域 · 可新增切片" : "表格行选区",
+        rowSel.allGap
+          ? ("ℹ " + rowLabel + " 没有切片覆盖")
+          : ("ℹ " + rowLabel + " · 已选 " + rowSel.rows.length + " 行" + (selChunks.length ? "（对应 " + selChunks.length + " 个切片）" : "")),
+        rowSel.allGap ? "未切片区域 · 可新增切片" : (selChunks.length ? "表格行选区 · 可合并或删除" : "表格行选区"),
         null,
         true
       ));
       var gapText = rowSel.text;
       if (gapText.length > 20000) gapText = gapText.slice(0, 20000) + "…";
-      el.ctxMenu.appendChild(ctxItem(
-        rowSel.from === rowSel.to ? "✚ 用这一行新增切片" : "✚ 用选中的表格行新增切片",
-        rowLabel + " · " + gapText.length + " 字",
-        (function (info, txt) {
-          return function () {
-            openAdd({
-              start: info.block.start,
-              end: info.block.end,
-              text: txt,
-              tableRows: [info.from, info.to],
-              tableRowsArr: info.rows,
-              tableGap: info.allGap
-            });
-          };
-        })(rowSel, gapText)
-      ));
+      if (rowSel.allGap) {
+        el.ctxMenu.appendChild(ctxItem(
+          rowSel.from === rowSel.to ? "✚ 用这一行新增切片" : "✚ 用选中的表格行新增切片",
+          rowLabel + " · " + gapText.length + " 字",
+          (function (info, txt) {
+            return function () {
+              openAdd({
+                start: info.block.start,
+                end: info.block.end,
+                text: txt,
+                tableRows: [info.from, info.to],
+                tableRowsArr: info.rows,
+                tableGap: info.allGap
+              });
+            };
+          })(rowSel, gapText)
+        ));
+        placeCtxMenu(ev);
+        return;
+      }
+      if (selChunks.length) {
+        var selIdxs = [];
+        var contiguous = true;
+        for (var ci = 0; ci < selChunks.length; ci++) {
+          var cidx = doc.chunks.indexOf(selChunks[ci]);
+          selIdxs.push(cidx);
+          if (cidx < 0) contiguous = false;
+          else if (ci > 0 && cidx !== selIdxs[ci - 1] + 1) contiguous = false;
+        }
+        if (selIdxs.length >= 2 && contiguous) {
+          el.ctxMenu.appendChild(ctxItem(
+            "⤵ 合并所选 " + selIdxs.length + " 个切片",
+            "表格行选区 · 保留第一个切片",
+            function () { hideRowPick(); mergeMany(selChunks); }
+          ));
+        }
+        el.ctxMenu.appendChild(ctxItem(
+          "✕ 删除所选 " + selChunks.length + " 个切片",
+          rowLabel + " 对应的切片",
+          function () { hideRowPick(); dropChunks(selChunks); }
+        ));
+      }
       placeCtxMenu(ev);
       return;
     }
@@ -2335,6 +2546,28 @@
       // 删除后停留在原行：滚动位置由 applyDocPayload 保持，这里只补一句明确提示
       setStatus("已删除 " + droppedId + " · 原文与表格位置保持不变（Ctrl+Z 可撤销）", "ok");
     });
+  }
+
+  // 批量删除（表格行选区）：顺序逐块删除，全部完成后提示一次
+  function dropChunks(chunks) {
+    if (!state.doc || !chunks || !chunks.length) return;
+    var ids = chunks.map(function (c) { return c.id; });
+    state.activeChunk = null;
+    var i = 0;
+    function next() {
+      if (i >= ids.length) {
+        setStatus("已删除 " + ids.length + " 个切片（Ctrl+Z 可逐条撤销）", "ok");
+        return;
+      }
+      var id = ids[i++];
+      postJSON("/api/op", { key: state.docKey, op: { op: "drop", id: id } }).then(function (doc) {
+        applyDocPayload(doc);
+        next();
+      }).catch(function (err) {
+        opFailed(err, state.opErrEl);
+      });
+    }
+    next();
   }
 
   function mergeChunk(chunk, direction) {
@@ -2792,6 +3025,8 @@
       if (ev.key === "Escape") {
         hideCtxMenu();
         hideSplitCaret();
+        hideRowPick();
+        state.suppressNextClick = false;
         [el.dialog, el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
           if (dlg && dlg.open) dlg.close();
         });
@@ -2831,8 +3066,12 @@
     bindDocEvents();
     // 点菜单外部 / 滚动原文或切片 / 窗口尺寸变化时收起右键菜单与拆分光标
     document.addEventListener("click", function (ev) {
-      if (!el.ctxMenu.hidden && !el.ctxMenu.contains(ev.target)) hideCtxMenu();
+      var inMenu = el.ctxMenu.contains(ev.target);
+      var inTable = ev.target && ev.target.closest && ev.target.closest(".line.table-block");
+      if (!el.ctxMenu.hidden && !inMenu) hideCtxMenu();
       if (el.source && !el.source.contains(ev.target)) hideSplitCaret();
+      // 行选区只属于当前表格：点到别处（菜单/对话框除外）即收起
+      if (!inMenu && !inTable && state.rowPick) hideRowPick();
     });
     el.source.addEventListener("scroll", function () {
       if (!programmaticScrollNow()) hideCtxMenu();
