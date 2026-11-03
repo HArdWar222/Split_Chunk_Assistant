@@ -1906,17 +1906,21 @@
 
   function doUndo() {
     if (!state.doc || !state.doc.edits || !state.doc.edits.undo) return;
+    // 撤销/重做会改变块 id 的对应关系（新增会重排 id），清掉旧选中避免高亮到别的块
+    state.activeChunk = null;
     postEditCmd("/api/undo", "已撤销");
   }
 
   function doRedo() {
     if (!state.doc || !state.doc.edits || !state.doc.edits.redo) return;
+    state.activeChunk = null;
     postEditCmd("/api/redo", "已重做");
   }
 
   function doReset() {
     if (!state.doc || !state.doc.dirty) return;
     if (!window.confirm("丢弃本文件的全部手工修改，回到自动切块结果？")) return;
+    state.activeChunk = null;
     postEditCmd("/api/reset", "已重置到自动切块结果");
   }
 
@@ -2158,6 +2162,12 @@
       state.addSpan = null;
       state.addBeforeId = null;
       applyDocPayload(doc);
+      // 新建的切片要立刻高亮：按 diff 的 added_ids 选中它，并让原文/右栏同步定位
+      var addedIds = (doc.diff && doc.diff.added_ids) || [];
+      var addedChunk = addedIds.length ? findChunk(addedIds[0]) : null;
+      if (addedChunk) {
+        selectChunk(addedChunk, { scrollSource: true, scrollCard: true });
+      }
       showToast(hadSpan ? "已按原文选区新增一块" : "已新增一块", "ok");
     }).catch(function (err) {
       opFailed(err, el.addErrors);
