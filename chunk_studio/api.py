@@ -103,6 +103,17 @@ class App:
             except ManifestError as exc:
                 raise ApiError(404, str(exc)) from None
 
+        if method == "GET" and path == "/api/tables":
+            key = (query.get("key") or [""])[0].strip()
+            if not key:
+                raise ApiError(400, "缺少 key 参数")
+            try:
+                return _json(self.studio.tables_payload(key))
+            except SourceMissingError as exc:
+                raise ApiError(404, str(exc)) from None
+            except ManifestError as exc:
+                raise ApiError(404, str(exc)) from None
+
         if method == "POST" and path in {"/api/op", "/api/undo", "/api/redo", "/api/reset"}:
             data = self._read_json(body)
             key = str(data.get("key") or "").strip()

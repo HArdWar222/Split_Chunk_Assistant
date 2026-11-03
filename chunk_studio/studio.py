@@ -44,6 +44,9 @@ PUBLIC_EXTRAS = (
 #: 文档载荷缓存条数（来回切换文件不重复读盘 + 重复对齐）。
 DOC_CACHE_SIZE = 8
 
+#: 表格视图缓存条数（table_grid 体积大，按文件懒加载）。
+TABLES_CACHE_SIZE = 8
+
 
 def _public_extras(extras: dict) -> dict:
     out: dict = {}
@@ -71,6 +74,7 @@ class Studio:
         self._bridge: FacBridge | None = None
         self._error: str | None = None
         self._doc_cache: "OrderedDict[str, dict]" = OrderedDict()
+        self._tables_cache: "OrderedDict[str, dict]" = OrderedDict()
         self._default_roots: dict[str, str] = {}
         # P2 会话内编辑：key -> 命令列表；撤销 = 弹出并整体重放，不落盘（P3 才写覆盖层）
         self._ops: dict[str, list[dict]] = {}
@@ -82,6 +86,7 @@ class Studio:
         self._bridge = None
         self._error = None
         self._doc_cache.clear()
+        self._tables_cache.clear()
         self._ops.clear()
         self._redo.clear()
         self._default_roots = {}
@@ -289,6 +294,55 @@ class Studio:
             "undo": len(ops),
             "redo": len(self._redo.get(key) or []),
         }
+        return payload
+
+    # -- P2 表格视图（table_grid） ---------------------------------------
+    def tables_payload(self, key: str) -> dict:
+        """单个文件所有表块的 ``table_grid``（结构化行列），供前端画真表格。
+
+        不塞进 doc_payload 的原因：山东自由裁量标准这类文件有 684 个表块，
+        网格 JSON 约 400KB，能画表格的页面按需单独取一次即可。
+        """
+        if self._bridge is None:
+            raise ManifestError(self._error or "切块产物不可用")
+        cached = self._tables_cache.get(key)
+        if cached is not None:
+            self._tables_cache.move_to_end(key)
+            return cached
+
+        entry = self._bridge.manifest.get(key)
+        extras = self._bridge.extras(key)
+        tables: dict[str, dict] = {}
+        for chunk_id, extra in extras.items():
+            grid = extra.get("table_grid")
+            if not isinstance(grid, dict) or grid.get("rows") is None:
+                continue
+            rows = [[str(cell) for cell in row] for row in (grid.get("rows") or [])]
+            headers = [str(head) for head in (grid.get("headers") or [])]
+            width = max([int(grid.get("width") or 0), len(headers)] + [len(row) for row in rows] or [1])
+            note_from = grid.get("note_from")
+            tables[chunk_id] = {
+                "headers": headers,
+                "rows": rows,
+                "width": width,
+                "header_rows": int(grid.get("header_rows") or 1),
+                "note_from": int(note_from) if note_from is not None else len(rows),
+                "table_label": str(extra.get("table_label") or ""),
+                "table_title": str(extra.get("table_title") or ""),
+                "table_mode": str(extra.get("table_mode") or ""),
+                "table_rows": int(extra.get("table_rows") or 0),
+            }
+
+        payload = {
+            "ok": True,
+            "key": key,
+            "law_name": entry.law_name,
+            "n_tables": len(tables),
+            "tables": tables,
+        }
+        self._tables_cache[key] = payload
+        while len(self._tables_cache) > TABLES_CACHE_SIZE:
+            self._tables_cache.popitem(last=False)
         return payload
 
     # -- P2 编辑命令 -----------------------------------------------------

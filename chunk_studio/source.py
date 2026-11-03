@@ -15,6 +15,9 @@ from .manifest import FileEntry, ManifestError, SourceMissingError
 #: 单行超过该字符数时前端折叠显示（典型场景：一行 10 万字符的 HTML 表格）。
 DISPLAY_MAX_CHARS = 4000
 
+#: 含 HTML 表格的超长行不折叠，但要有个上限兜底（极端文件）。
+TABLE_RAW_LIMIT = 2_000_000
+
 
 def default_roots_from_manifest(manifest) -> dict[str, str]:
     """从 manifest 的 files 推导每个分组第一个文件的父目录（设置面板默认值）。"""
@@ -67,8 +70,15 @@ def read_lines(path: Path | str) -> list[str]:
 
 
 def display_text(raw: str) -> tuple[str, bool]:
-    """返回（展示文本，是否折叠）。超长行只送前 4000 字符，避免前端卡死。"""
+    """返回（展示文本，是否折叠）。
+
+    普通超长行只送前 4000 字符，避免前端卡死；但**含 HTML 表格的行**要整行送给
+    前端画表格（典型：一行 20 万字符的整张表），只有超过 :data:`TABLE_RAW_LIMIT`
+    才折叠。
+    """
     if len(raw) <= DISPLAY_MAX_CHARS:
+        return raw, False
+    if "<table" in raw.lower() and len(raw) <= TABLE_RAW_LIMIT:
         return raw, False
     return raw[:DISPLAY_MAX_CHARS] + f"……（本行共 {len(raw)} 字符，已折叠）", True
 

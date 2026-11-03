@@ -280,6 +280,55 @@ class AppTest(unittest.TestCase):
         self.assertFalse(data["dirty"])
         self.assertEqual(data["edits"]["n_ops"], 0)
 
+    # -- /api/tables ------------------------------------------------
+    def tables(self, key: str):
+        return self.body(self.get("/api/tables?key=" + quote(key, safe="")))
+
+    def test_tables_empty(self):
+        status, data = self.tables("national_laws/测试法")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["n_tables"], 0)
+        self.assertEqual(data["tables"], {})
+
+    def test_tables_with_grid(self):
+        # 给 测试法-0001 补一个 table_grid（模拟表块），/api/tables 应返回结构化网格
+        jsonl = self.chunks_dir / "national_laws__测试法.jsonl"
+        rows = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows[0]["chunk_kind"] = "table"
+        jsonl.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+        extras_path = self.chunks_dir / "_extras.jsonl"
+        extras = [json.loads(line) for line in extras_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        entry = next((item for item in extras if item["id"] == rows[0]["id"]), None)
+        if entry is None:
+            entry = {"id": rows[0]["id"], "extras": {}}
+            extras.append(entry)
+        entry["extras"] = {
+            "table_label": "表1",
+            "table_grid": {"headers": ["序号", "名称"], "rows": [["1", "甲"], ["2", "乙"]], "header_rows": 1},
+        }
+        extras_path.write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in extras), encoding="utf-8")
+        self.studio.reload()
+        status, data = self.tables("national_laws/测试法")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["n_tables"], 1)
+        grid = data["tables"][rows[0]["id"]]
+        self.assertEqual(grid["headers"], ["序号", "名称"])
+        self.assertEqual(grid["width"], 2)
+        self.assertEqual(grid["rows"], [["1", "甲"], ["2", "乙"]])
+        self.assertEqual(grid["note_from"], 2)
+        self.assertEqual(grid["table_label"], "表1")
+
+    def test_tables_missing_key(self):
+        status, _ = self.body(self.get("/api/tables"))
+        self.assertEqual(status, 400)
+
+    def test_tables_unknown_key(self):
+        status, _ = self.body(self.get("/api/tables?key=" + quote("national_laws/不存在", safe="")))
+        self.assertEqual(status, 404)
+
     def test_index(self):
         status, ctype, raw = self.get("/")
         self.assertEqual(status, 200)

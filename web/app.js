@@ -18,6 +18,8 @@
     hoverLine: null,   // 当前悬停的源行号
     selHits: [],       // 当前选区命中的 chunk id
     selRange: null,    // 当前选区行范围 {start, end}（1-based 闭区间）
+    tables: null,      // /api/tables 载荷：chunk id -> table_grid（懒加载）
+    tableBlocks: [],   // 原文里被渲染成表格的行区间 [{start, end, el}]
     pendingChunk: null,// 当前弹层操作的切片
     addAfterId: null,  // 新增切片的插入位置（null = 末尾）
     addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
@@ -107,6 +109,258 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  // ---------- 表格可视化（管道表 / HTML 表 / table_grid） ----------
+  function isPipeLine(text) {
+    var s = String(text || "").trim();
+    return s.charAt(0) === "|" && s.indexOf("|", 1) >= 0;
+  }
+
+  function isSepLine(text) {
+    var s = String(text || "").trim();
+    return s.indexOf("-") >= 0 && /^\|?[\s:|\-]+\|?$/.test(s);
+  }
+
+  function splitPipeRow(text) {
+    var s = String(text || "").trim();
+    if (s.charAt(0) === "|") s = s.slice(1);
+    if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1);
+    return s.split("|").map(function (cell) { return cell.trim(); });
+  }
+
+  function buildPipeTableHtml(lines, metaText) {
+    var sep = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (isSepLine(lines[i])) { sep = i; break; }
+    }
+    if (sep <= 0) return null;
+    var headers = splitPipeRow(lines[0]);
+    var rows = [];
+    for (var r = sep + 1; r < lines.length; r++) {
+      if (!isPipeLine(lines[r])) break;
+      rows.push(splitPipeRow(lines[r]));
+    }
+    var width = headers.length;
+    rows.forEach(function (cells) { width = Math.max(width, cells.length); });
+    // 单元格里常见 <br>（源 md 管道表里用 HTML 换行），转成真换行，不要原样显示标签
+    function cellHtml(text) {
+      return escapeHtml(text).replace(/&lt;br\s*\/?&gt;/gi, "<br>");
+    }
+    function rowHtml(cells, tag) {
+      var out = [];
+      for (var k = 0; k < width; k++) {
+        out.push("<" + tag + ">" + cellHtml(cells[k] === undefined ? "" : cells[k]) + "</" + tag + ">");
+      }
+      return "<tr>" + out.join("") + "</tr>";
+    }
+    var meta = metaText || ("管道表 · " + rows.length + " 行 × " + width + " 列");
+    return '<div class="tblmeta">' + escapeHtml(meta) + '</div>' +
+      '<div class="tblwrap"><table class="grid-table"><thead>' + rowHtml(headers, "th") + '</thead><tbody>' +
+      rows.map(function (cells) { return rowHtml(cells, "td"); }).join("") + '</tbody></table></div>';
+  }
+
+  function sanitizeTableNode(root) {
+    var nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var tag = node.tagName ? node.tagName.toLowerCase() : "";
+      if (tag === "script" || tag === "style" || tag === "iframe" || tag === "object" ||
+          tag === "embed" || tag === "link" || tag === "meta" || tag === "form") {
+        if (node.parentNode) node.parentNode.removeChild(node);
+        continue;
+      }
+      var attrs = [];
+      for (var a = 0; a < node.attributes.length; a++) attrs.push(node.attributes[a].name);
+      attrs.forEach(function (name) {
+        var lower = name.toLowerCase();
+        var value = node.getAttribute(name) || "";
+        if (lower.indexOf("on") === 0 || lower === "style" || lower === "src" ||
+            (lower === "href" && /^\s*javascript:/i.test(value))) {
+          node.removeAttribute(name);
+        }
+      });
+    }
+    return root;
+  }
+
+  var HTML_TABLE_RE = /<table\b[\s\S]*?<\/table>/gi;
+
+  function buildHtmlTablesHtml(html, metaText) {
+    if (!html || typeof DOMParser === "undefined") return null;
+    var doc;
+    try {
+      doc = new DOMParser().parseFromString("<div>" + html + "</div>", "text/html");
+    } catch (err) {
+      return null;
+    }
+    var tables = doc.querySelectorAll("table");
+    if (!tables.length) return null;
+    var out = [];
+    var meta = metaText || "";
+    for (var i = 0; i < tables.length; i++) {
+      var table = tables[i];
+      var clone = table.cloneNode(true);
+      clone.className = "grid-table";
+      var holder = doc.createElement("div");
+      holder.appendChild(clone);
+      sanitizeTableNode(holder);
+      var nRows = clone.querySelectorAll("tr").length;
+      var firstRow = clone.querySelector("tr");
+      var nCols = firstRow ? firstRow.children.length : 0;
+      var label = meta || (i === 0 && tables.length === 1 ? "" : "HTML 表 #" + (i + 1));
+      var head = '<div class="tblmeta">' + escapeHtml(
+        (label ? label + " · " : "") + nRows + " 行 × " + nCols + " 列") + '</div>';
+      out.push(head + '<div class="tblwrap">' + holder.innerHTML + '</div>');
+    }
+    return out.join("");
+  }
+
+  function buildGridTableHtml(table) {
+    var headers = (table.headers || []).map(String);
+    var rows = (table.rows || []).map(function (row) {
+      return (row || []).map(String);
+    });
+    var width = Math.max(parseInt(table.width, 10) || 0, headers.length);
+    rows.forEach(function (cells) { width = Math.max(width, cells.length); });
+    if (!width) width = 1;
+    while (headers.length < width) headers.push("");
+    var headHtml = "<tr>" + headers.map(function (head) {
+      return "<th>" + escapeHtml(head) + "</th>";
+    }).join("") + "</tr>";
+    var noteFrom = (table.note_from === undefined || table.note_from === null)
+      ? rows.length : parseInt(table.note_from, 10);
+    if (!isFinite(noteFrom)) noteFrom = rows.length;
+    var bodyHtml = rows.map(function (cells, index) {
+      while (cells.length < width) cells.push("");
+      if (index >= noteFrom) {
+        return '<tr class="noterow"><td colspan="' + width + '">' + escapeHtml(cells.join(" ").trim()) + '</td></tr>';
+      }
+      return "<tr>" + cells.map(function (cell) {
+        return "<td>" + escapeHtml(cell) + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+    var meta = [];
+    if (table.table_label) meta.push(escapeHtml(table.table_label));
+    if (table.table_title) meta.push(escapeHtml(table.table_title));
+    meta.push("表头 " + (parseInt(table.header_rows, 10) || 1) + " 行 · " + rows.length + " 行 × " + width + " 列");
+    return '<div class="tblmeta">' + meta.join(" · ") + '</div>' +
+      '<div class="tblwrap"><table class="grid-table"><thead>' + headHtml + '</thead><tbody>' +
+      bodyHtml + '</tbody></table></div>';
+  }
+
+  // 切片正文 → 可视化 HTML：优先 table_grid；否则按管道表 / HTML 表解析；纯文字回退 pre
+  function chunkBodyHtml(chunk) {
+    var raw = String(chunk.chunk === null || chunk.chunk === undefined ? "" : chunk.chunk);
+    var tables = state.tables || {};
+    var grid = chunk.manual ? null : tables[chunk.id];
+    if (grid) {
+      return buildGridTableHtml(grid) +
+        '<details class="chunk-raw"><summary>原始正文（送进检索的就是这段文字）</summary>' +
+        '<pre class="chunk-raw-pre">' + escapeHtml(raw) + '</pre></details>';
+    }
+
+    var lines = raw.split("\n");
+    var segments = [];
+    var buffer = [];
+    function flushText() {
+      if (buffer.length) { segments.push({ type: "text", lines: buffer.slice() }); buffer = []; }
+    }
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (/<table\b/i.test(line)) {
+        flushText();
+        var acc = [line];
+        i++;
+        while (i < lines.length && !/<\/table>/i.test(acc[acc.length - 1]) && acc.length < 400) {
+          acc.push(lines[i]);
+          i++;
+        }
+        segments.push({ type: "html", text: acc.join("\n") });
+        continue;
+      }
+      if (isPipeLine(line)) {
+        var block = [];
+        while (i < lines.length && (isPipeLine(lines[i]) || isSepLine(lines[i]))) {
+          block.push(lines[i]);
+          i++;
+        }
+        var hasSep = block.some(isSepLine);
+        if (hasSep && block.length >= 2) {
+          flushText();
+          segments.push({ type: "pipe", lines: block });
+        } else {
+          for (var q = 0; q < block.length; q++) buffer.push(block[q]);
+        }
+        continue;
+      }
+      buffer.push(line);
+      i++;
+    }
+    flushText();
+
+    var hasTable = segments.some(function (seg) { return seg.type !== "text"; });
+    if (!hasTable) return '<pre class="chunk-body">' + escapeHtml(raw) + '</pre>';
+
+    var html = segments.map(function (seg) {
+      if (seg.type === "text") {
+        return '<pre class="chunk-body">' + escapeHtml(seg.lines.join("\n")) + '</pre>';
+      }
+      if (seg.type === "pipe") {
+        var pipe = buildPipeTableHtml(seg.lines);
+        if (pipe) return pipe;
+        return '<pre class="chunk-body">' + escapeHtml(seg.lines.join("\n")) + '</pre>';
+      }
+      var built = buildHtmlTablesHtml(seg.text);
+      if (built) return built;
+      return '<pre class="chunk-body">' + escapeHtml(seg.text) + '</pre>';
+    }).join("");
+    return html +
+      '<details class="chunk-raw"><summary>原始正文（送进检索的就是这段文字）</summary>' +
+      '<pre class="chunk-raw-pre">' + escapeHtml(raw) + '</pre></details>';
+  }
+
+  // 原文行 → 表格块：[{kind, start, end, lines?, text?}]（1-based 闭区间）
+  function detectSourceTableBlocks(lines) {
+    var blocks = [];
+    var total = lines.length;
+    var i = 0;
+    while (i < total) {
+      var text = lines[i].text || "";
+      if (/<table\b/i.test(text)) {
+        var end = i;
+        if (!/<\/table>/i.test(text)) {
+          var j = i + 1;
+          while (j < total && j < i + 400 && !/<\/table>/i.test(lines[j].text || "")) j++;
+          end = Math.min(j, total - 1);
+        }
+        blocks.push({ kind: "html", start: i + 1, end: end + 1, text: text });
+        i = end + 1;
+        continue;
+      }
+      if (isPipeLine(text)) {
+        var s = i;
+        while (i < total && (isPipeLine(lines[i].text || "") || isSepLine(lines[i].text || ""))) i++;
+        var blockLines = [];
+        for (var k = s; k < i; k++) blockLines.push(lines[k].text || "");
+        var hasSep = blockLines.some(isSepLine);
+        if (hasSep && blockLines.length >= 2 && blockLines.length <= 300) {
+          blocks.push({ kind: "pipe", start: s + 1, end: i, lines: blockLines });
+        }
+        continue;
+      }
+      i++;
+    }
+    return blocks;
+  }
+
+  function tableBlockAt(line) {
+    var blocks = state.tableBlocks || [];
+    for (var i = 0; i < blocks.length; i++) {
+      if (line >= blocks[i].start && line <= blocks[i].end) return blocks[i];
+    }
+    return null;
   }
 
   function getJSON(url) {
@@ -273,9 +527,30 @@
   }
 
   // ---------- 文档：原文 + 切片 ----------
+  // 表块 grid 体积大（山东自由裁量标准约 400KB），按文件懒加载；到货后只重画右栏卡片
+  function loadTablesFor(doc, seq) {
+    state.tables = null;
+    getJSON("/api/tables?key=" + encodeURIComponent(doc.key)).then(function (payload) {
+      if (seq !== loadDoc._seq || !state.doc || state.doc.key !== doc.key) return;
+      if (!payload || !payload.tables || !Object.keys(payload.tables).length) return;
+      state.tables = payload.tables;
+      var chunksTop = el.chunks.scrollTop;
+      var activeId = state.activeChunk;
+      renderChunks(state.doc);
+      el.chunks.scrollTop = chunksTop;
+      if (activeId) {
+        var chunk = findChunk(activeId);
+        if (chunk) selectChunk(chunk, { scrollSource: false, scrollCard: false });
+      }
+    }).catch(function () {
+      /* 表格视图加载失败不影响文字视图 */
+    });
+  }
+
   function loadDoc(file) {
     hideSplitCaret();
     var seq = (loadDoc._seq = (loadDoc._seq || 0) + 1);
+    state.tables = null;
     setStatus("加载 " + file.law_name + " …");
     el.source.innerHTML = "<div class='empty'><p>加载原文中…</p></div>";
     el.chunks.innerHTML = "<div class='empty'><p>加载切片中…</p></div>";
@@ -292,6 +567,7 @@
       state.hoverChunk = null;
       renderDocument(doc);
       syncEditUI(doc);
+      loadTablesFor(doc, seq);
       setStatus("已加载 " + doc.law_name + " · " + fmtInt(doc.stats.n_chunks) + " 块 · 对齐 " +
         fmtInt(doc.stats.n_aligned) + "/" + fmtInt(doc.stats.n_chunks) + " (" +
         (doc.stats.align_rate * 100).toFixed(1) + "%)", "ok");
@@ -309,6 +585,7 @@
   function renderDocument(doc) {
     state.selHits = [];
     state.selRange = null;
+    state.tableBlocks = [];
     renderSource(doc);
     renderChunks(doc);
     renderDocMeta(doc);
@@ -365,19 +642,35 @@
       }
     });
 
-    for (var j = 0; j < total; j++) {
-      var line = doc.lines[j];
-      var row = document.createElement("div");
-      row.className = "line kind-" + line.kind;
-      row.dataset.line = String(line.n);
-      var no = document.createElement("span");
-      no.className = "no";
-      no.textContent = String(line.n);
-      var lanes = document.createElement("span");
-      lanes.className = "lanes";
-      var buckets = laneBuckets[line.n] || {};
-      Object.keys(buckets).forEach(function (key) {
-        var cell = buckets[key];
+    // 表格块（管道表 / HTML 表）：在起始行渲染成真表格；后续行隐藏但保留 data-line 供映射
+    var blocks = detectSourceTableBlocks(doc.lines);
+    var blockByStart = {};
+    var hiddenLine = {};
+    blocks.forEach(function (block) {
+      blockByStart[block.start] = block;
+      for (var h = block.start + 1; h <= block.end; h++) hiddenLine[h] = true;
+    });
+
+    function barsForRange(start, end) {
+      var bars = {};
+      doc.chunks.forEach(function (chunk, idx) {
+        if (!chunk.span) return;
+        if (chunk.span[1] < start || chunk.span[0] > end) return;
+        var lane = laneOfChunk[idx];
+        var bar = bars[lane];
+        if (!bar) bar = bars[lane] = { lane: lane, chunks: [], start: false, end: false };
+        bar.chunks.push(idx);
+        if (chunk.span[0] >= start && chunk.span[0] <= end) bar.start = true;
+        if (chunk.span[1] >= start && chunk.span[1] <= end) bar.end = true;
+        // 覆盖整块 → 是块内部的一段，画成连续竖条（不留断口）
+        if (chunk.span[0] <= start && chunk.span[1] >= end) { bar.start = false; bar.end = false; }
+      });
+      return bars;
+    }
+
+    function appendLanes(lanesEl, bars, lineNo) {
+      Object.keys(bars).forEach(function (key) {
+        var cell = bars[key];
         var bar = document.createElement("span");
         bar.className = "lane lane-" + cell.lane;
         if (cell.start) bar.className += " start";
@@ -389,19 +682,63 @@
           bar.title = "切片 #" + (cell.chunks[0] + 1) + " · " + only.id + " · 第 " + only.span[0] + "–" + only.span[1] + " 行";
         } else {
           var ids = cell.chunks.slice(0, 4).map(function (idx) { return doc.chunks[idx].id; }).join(", ");
-          bar.title = "第 " + line.n + " 行被 " + cell.chunks.length + " 个切片覆盖：" + ids +
+          bar.title = "第 " + lineNo + " 行被 " + cell.chunks.length + " 个切片覆盖：" + ids +
             (cell.chunks.length > 4 ? " …" : "");
         }
-        lanes.appendChild(bar);
+        lanesEl.appendChild(bar);
       });
+    }
+
+    for (var j = 0; j < total; j++) {
+      var line = doc.lines[j];
+      var block = blockByStart[line.n];
+      var row = document.createElement("div");
+      var no = document.createElement("span");
+      no.className = "no";
+      var lanes = document.createElement("span");
+      lanes.className = "lanes";
       var txt = document.createElement("span");
       txt.className = "txt";
-      if (line.text === "") {
-        row.className += " blank";
+
+      if (block) {
+        row.className = "line kind-table table-block";
+        row.dataset.line = String(line.n);
+        row.dataset.lineEnd = String(block.end);
+        no.textContent = block.start === block.end
+          ? String(block.start)
+          : block.start + "–" + block.end;
+        appendLanes(lanes, barsForRange(block.start, block.end), block.start);
+        var tableHtml = null;
+        if (block.kind === "pipe") {
+          tableHtml = buildPipeTableHtml(block.lines,
+            "管道表 · 第 " + block.start + "–" + block.end + " 行 · 源文件原样解析");
+        } else {
+          tableHtml = buildHtmlTablesHtml(block.text,
+            "HTML 表 · 第 " + block.start + "–" + block.end + " 行 · 源文件原样渲染");
+        }
+        if (tableHtml) {
+          txt.innerHTML = tableHtml;
+          row.className += " table-rendered";
+        } else {
+          txt.textContent = line.text || "";
+        }
+        state.tableBlocks.push({ start: block.start, end: block.end, el: row });
+      } else if (hiddenLine[line.n]) {
+        row.className = "line table-cont";
+        row.dataset.line = String(line.n);
       } else {
-        txt.textContent = line.text;
+        row.className = "line kind-" + line.kind;
+        row.dataset.line = String(line.n);
+        no.textContent = String(line.n);
+        appendLanes(lanes, laneBuckets[line.n] || {}, line.n);
+        if (line.text === "") {
+          row.className += " blank";
+        } else {
+          txt.textContent = line.text;
+        }
+        if (line.truncated) row.className += " truncated";
       }
-      if (line.truncated) row.className += " truncated";
+
       row.appendChild(no);
       row.appendChild(lanes);
       row.appendChild(txt);
@@ -454,9 +791,9 @@
       head.innerHTML = "<span class='chunk-seq'>#" + (index + 1) + "</span>" + badges.join("");
       card.appendChild(head);
 
-      var body = document.createElement("pre");
-      body.className = "chunk-body";
-      body.textContent = chunk.chunk;
+      var body = document.createElement("div");
+      body.className = "chunk-content";
+      body.innerHTML = chunkBodyHtml(chunk);
       card.appendChild(body);
 
       var foot = document.createElement("div");
@@ -542,6 +879,17 @@
         state.hlEls.push(row);
       }
     }
+    // 表格块：块内部行已被隐藏，把高亮落到整张表格上，保证区块可见
+    (state.tableBlocks || []).forEach(function (block) {
+      for (var b = block.start; b <= block.end; b++) {
+        var lineRow = state.lineEls[b - 1];
+        if (lineRow && lineRow.classList.contains(cls)) {
+          block.el.classList.add(cls);
+          state.hlEls.push(block.el);
+          return;
+        }
+      }
+    });
   }
 
   function clearLineHighlight() {
@@ -551,7 +899,7 @@
     state.hlEls = [];
   }
 
-  function highlightRelatedCards(line) {
+  function highlightRelatedCards(line, endLine) {
     var doc = state.doc;
     if (!doc) return [];
     if (state.cardEls._related) {
@@ -559,7 +907,17 @@
         if (state.cardEls[id]) state.cardEls[id].classList.remove("related");
       });
     }
-    var related = (state.lineChunks && state.lineChunks[line]) || [];
+    var last = endLine || line;
+    var related = [];
+    var seen = {};
+    for (var n = line; n <= last; n++) {
+      var arr = (state.lineChunks && state.lineChunks[n]) || [];
+      arr.forEach(function (chunk) {
+        if (seen[chunk.id]) return;
+        seen[chunk.id] = 1;
+        related.push(chunk);
+      });
+    }
     related.forEach(function (chunk) {
       if (state.cardEls[chunk.id]) state.cardEls[chunk.id].classList.add("related");
     });
@@ -630,6 +988,21 @@
     if (p1.line > p2.line) { var tmp = p1; p1 = p2; p2 = tmp; }
     var a = p1.line;
     var b = p2.line;
+    // 表格块内部选文字：表格是渲染出来的，字符偏移对不上源行 → 直接按整块行区间取源行原文
+    var blockA = tableBlockAt(a);
+    var blockB = tableBlockAt(b);
+    if (blockA || blockB) {
+      var startLine = blockA ? Math.min(blockA.start, a) : a;
+      var endLine = blockB ? Math.max(blockB.end, b) : b;
+      var srcLines = state.doc.lines || [];
+      var blockParts = [];
+      for (var q = startLine; q <= endLine; q++) {
+        blockParts.push(srcLines[q - 1] ? (srcLines[q - 1].text || "") : "");
+      }
+      var blockText = blockParts.join("\n");
+      if (blockText.length > 20000) blockText = blockText.slice(0, 20000) + "…";
+      return { start: startLine, end: endLine, text: blockText };
+    }
     var startOff = lineCharOffset(state.lineEls[a - 1], p1.node, p1.offset);
     var endOff = lineCharOffset(state.lineEls[b - 1], p2.node, p2.offset);
     if (a === b && startOff > endOff) { var swap = startOff; startOff = endOff; endOff = swap; }
@@ -814,13 +1187,17 @@
     }
     if (!rect) { hideSplitCaret(); return; }
     var chunk = chunkAtLine(pos.line);
-    var plan = chunk ? splitPlanAt(chunk, pos) : null;
+    var block = tableBlockAt(pos.line);
+    var plan = (chunk && !block) ? splitPlanAt(chunk, pos) : null;
     el.splitCaret.hidden = false;
     el.splitCaret.style.left = Math.round(rect.left - 1) + "px";
     el.splitCaret.style.top = Math.round(rect.top) + "px";
     el.splitCaret.style.height = Math.max(14, Math.round(rect.height)) + "px";
     var hint;
-    if (chunk && plan) {
+    if (block) {
+      hint = "▦ 表格块 · 第 " + block.start + "–" + block.end + " 行 · 右键可编辑此切片正文 / 拆分整块" +
+        (chunk ? " · " + chunk.id : "");
+    } else if (chunk && plan) {
       hint = "✂ 第 " + pos.line + " 行 · " + (plan.kind === "line" ? "行边界拆分" : "光标处拆分") + " · " + chunk.id;
     } else if (chunk) {
       hint = "✂ 第 " + pos.line + " 行 · 此位置不可拆分（块首/块尾/折叠行），可点行内文字或拖选";
@@ -972,7 +1349,8 @@
       var line = parseInt(row.dataset.line, 10);
       if (state.hoverLine === line) return;
       state.hoverLine = line;
-      highlightRelatedCards(line);
+      var end = row.dataset.lineEnd ? parseInt(row.dataset.lineEnd, 10) : line;
+      highlightRelatedCards(line, end);
     });
     el.source.addEventListener("mouseout", function (ev) {
       var row = ev.target.closest(".line");
@@ -993,7 +1371,8 @@
       var row = ev.target.closest(".line");
       if (!row) return;
       var line = parseInt(row.dataset.line, 10);
-      var related = highlightRelatedCards(line);
+      var end = row.dataset.lineEnd ? parseInt(row.dataset.lineEnd, 10) : line;
+      var related = highlightRelatedCards(line, end);
       if (related && related.length) {
         selectChunk(related[0], { scrollSource: false, scrollCard: true });
       }

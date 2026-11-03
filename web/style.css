@@ -728,3 +728,88 @@ body.no-lanes .line .lanes { display: none; }
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
+
+/* ---------- 表格可视化（管道表 / HTML 表 / table_grid） ---------- */
+.line.table-block { align-items: start; }
+.line.table-block .no { padding-top: 4px; font-size: 10.5px; color: #8a93a2; }
+.line.table-block .txt { min-width: 0; overflow: hidden; padding: 2px 2px 4px 0; }
+.line.table-cont { display: none; }
+.line.table-block.hl { box-shadow: inset 3px 0 0 var(--accent); }
+.line.table-block.hl .tblwrap, .line.table-block.hl-soft .tblwrap { border-color: #b9cdf0; }
+.line.table-block.hl-soft { background: #eef4ff; }
+
+.tblmeta {
+  color: #6b7280;
+  font-size: 10.5px;
+  margin: 2px 0 3px;
+  font-family: var(--mono);
+  line-height: 1.4;
+}
+
+.tblwrap {
+  overflow: auto;
+  max-height: 380px;
+  border: 1px solid #e2e5ea;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.grid-table {
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  min-width: 100%;
+}
+
+.grid-table th, .grid-table td {
+  border: 1px solid #e2e5ea;
+  padding: 4px 7px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.grid-table thead th {
+  background: #eef2f6;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.grid-table tbody tr:nth-child(even) td { background: #fafbfc; }
+.grid-table tr.noterow td { background: #fff8e8; color: #6b4a00; font-style: italic; }
+
+/* 切片卡片里的表格正文容器 */
+.chunk-content { margin: 6px 0 4px; }
+.chunk-content .chunk-body { margin: 0; max-height: 240px; }
+.chunk-card.active .chunk-content .chunk-body { max-height: 520px; background: #fafdff; }
+.chunk-content .tblwrap { max-height: 240px; }
+.chunk-card.active .chunk-content .tblwrap { max-height: 520px; }
+
+.chunk-raw { margin-top: 6px; }
+.chunk-raw summary {
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.chunk-raw summary:hover { text-decoration: underline; }
+.chunk-raw-pre {
+  margin: 5px 0 0;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #fbfcfe;
+  border: 1px dashed #e3e7ef;
+  border-radius: 6px;
+  max-height: 200px;
+  overflow: auto;
+}
+

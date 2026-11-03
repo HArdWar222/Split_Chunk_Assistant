@@ -34,3 +34,9 @@ _pw/
 _edgeprof/
 _shot*.png
 _*_test*.mjs
+_pw_*.mjs
+_shot_*.mjs
+_shots/
+_scan_*.py
+_probe*.py
+_msg*.txt

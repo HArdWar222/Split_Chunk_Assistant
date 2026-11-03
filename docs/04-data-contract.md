@@ -121,6 +121,8 @@
 | `table_mode` | 表格 | `model`（整表）/ `pack`（打包） |
 | `table_grid` | 表格 | `{headers, rows, header_rows, width}` 表格网格 |
 
+`table_grid` 只用于**视图层**画表：右栏表卡片按它渲染网格表（表头补齐、合并单元格抄平、`note_from` 之后的注释行黄底），原文侧则直接解析源 `.md` 的管道表 / HTML 表渲染；它不进入 15 字段、也不参与检索。人工改过正文的表格块（`manual=true`）前端不再使用旧 grid，避免显示过期内容。
+
 示例：
 
 ```json

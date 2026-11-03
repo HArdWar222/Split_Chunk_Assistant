@@ -190,6 +190,7 @@ state = {
 |---|---|---|---|---|
 | GET | `/api/files` | — | 文件列表 | 97 个文件、组、块数、编辑数、对齐分布 |
 | GET | `/api/doc` | `key` | `DocView` | 打开文档（含缓存） |
+| GET | `/api/tables` | `key` | `{tables: {chunk_id: grid}}` | 表格块的结构化网格（视图层，按文件懒加载、最近 8 个文件缓存） |
 | GET | `/api/source` | `key` | 原始 md | 下载/对照用，`text/markdown` |
 | POST | `/api/op` | `key, op` | `{chunks, diff}` | 单个编辑命令，返回增量 |
 | POST | `/api/save` | `key, chunks, note` | `{ok, saved_at}` | 写覆盖层 |
