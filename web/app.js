@@ -26,7 +26,8 @@
     pendingChunk: null,// 当前弹层操作的切片
     addAfterId: null,  // 新增切片的插入位置（null = 末尾）
     addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
-    addSpan: null      // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
+    addSpan: null,     // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
+    programmaticScroll: 0 // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
   };
 
   var el = {
@@ -1398,7 +1399,7 @@
       return top + card.offsetHeight > el.chunks.scrollTop &&
         top < el.chunks.scrollTop + el.chunks.clientHeight;
     });
-    if (!anyVisible) scrollToCard(hits[0].id);
+    if (!anyVisible && el.ctxMenu.hidden) scrollToCard(hits[0].id);
   }
 
   function scheduleSelectionCheck() {
@@ -1406,11 +1407,17 @@
     scheduleSelectionCheck._t = window.setTimeout(applySelectionNow, 120);
   }
 
+  // 最近 200ms 内是否有程序化滚动（避免选区联动把刚弹出的右键菜单关掉）
+  function programmaticScrollNow() {
+    return !!(state.programmaticScroll && Date.now() - state.programmaticScroll < 200);
+  }
+
   function scrollToLine(n) {
     var row = state.lineEls[n - 1];
     if (!row) return;
     var container = el.source;
     var top = row.offsetTop - container.clientHeight / 2 + row.offsetHeight / 2;
+    state.programmaticScroll = Date.now();
     container.scrollTop = Math.max(0, top);
   }
 
@@ -1419,6 +1426,7 @@
     if (!card) return;
     var container = el.chunks;
     var top = card.offsetTop - container.clientHeight / 2 + card.offsetHeight / 2;
+    state.programmaticScroll = Date.now();
     container.scrollTop = Math.max(0, top);
   }
 
@@ -1659,6 +1667,26 @@
       el.ctxMenu.appendChild(ctxItem("✚ 用选区新增切片", rangeLabel + " · " + picked.text.length + " 字", function () {
         openAdd(picked);
       }));
+      count++;
+    }
+
+    // 右键落在表格块上（没选中文字时）→ 直接给「在表格块处新增切片」
+    var hereBlock = tableBlockAt(line);
+    if (hereBlock && !(picked && picked.text.trim())) {
+      var rawParts = [];
+      var blockLines = doc.lines || [];
+      for (var bq = hereBlock.start; bq <= hereBlock.end; bq++) {
+        rawParts.push(blockLines[bq - 1] ? (blockLines[bq - 1].text || "") : "");
+      }
+      var rawText = rawParts.join("\n");
+      if (rawText.length > 20000) rawText = rawText.slice(0, 20000) + "…";
+      el.ctxMenu.appendChild(ctxItem(
+        "✚ 在表格块处新增切片",
+        "第 " + hereBlock.start + "–" + hereBlock.end + " 行",
+        (function (b, t) {
+          return function () { openAdd({ start: b.start, end: b.end, text: t }); };
+        })(hereBlock, rawText)
+      ));
       count++;
     }
 
@@ -2322,8 +2350,13 @@
       if (!el.ctxMenu.hidden && !el.ctxMenu.contains(ev.target)) hideCtxMenu();
       if (el.source && !el.source.contains(ev.target)) hideSplitCaret();
     });
-    el.source.addEventListener("scroll", function () { hideCtxMenu(); hideSplitCaret(); });
-    el.chunks.addEventListener("scroll", function () { hideCtxMenu(); });
+    el.source.addEventListener("scroll", function () {
+      if (!programmaticScrollNow()) hideCtxMenu();
+      hideSplitCaret();
+    });
+    el.chunks.addEventListener("scroll", function () {
+      if (!programmaticScrollNow()) hideCtxMenu();
+    });
     window.addEventListener("resize", function () { hideCtxMenu(); hideSplitCaret(); });
     window.addEventListener("hashchange", function () {
       var key = keyFromHash();
