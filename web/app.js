@@ -668,6 +668,19 @@
       return bars;
     }
 
+    // 表格块的宿主源行：整张表在 .md 里往往只占一行（如山东自由裁量 23 万字符的 HTML 表），
+    // 但切块器会把它切成成百上千个表格块，它们的 span 全是同一行 → 泳道会画成很多条，
+    // 视觉上误导。超过泳道上限时合并成一根「聚合条」并在 meta 里标出切片数。
+    function chunksInTableBlock(start, end) {
+      var out = [];
+      doc.chunks.forEach(function (chunk, idx) {
+        if (!chunk.span) return;
+        if (chunk.span[1] < start || chunk.span[0] > end) return;
+        out.push(idx);
+      });
+      return out;
+    }
+
     function appendLanes(lanesEl, bars, lineNo) {
       Object.keys(bars).forEach(function (key) {
         var cell = bars[key];
@@ -707,14 +720,33 @@
         no.textContent = block.start === block.end
           ? String(block.start)
           : block.start + "–" + block.end;
-        appendLanes(lanes, barsForRange(block.start, block.end), block.start);
+
+        var blockChunks = chunksInTableBlock(block.start, block.end);
+        var blockRange = block.start === block.end
+          ? String(block.start)
+          : block.start + "–" + block.end;
+        var blockMeta = (block.kind === "pipe" ? "管道表" : "HTML 表") + " · 第 " + blockRange + " 行";
+        var blockSuffix = blockChunks.length > 1 ? " · " + blockChunks.length + " 个切片" : "";
+        if (blockChunks.length > MAX_LANES) {
+          // 一张表被切成了很多块、span 又都是同一源码行：合并成一根聚合条，避免误导成「四条不同的块」
+          var agg = document.createElement("span");
+          agg.className = "lane lane-agg";
+          agg.dataset.chunk = String(blockChunks[0]);
+          var firstChunk = doc.chunks[blockChunks[0]];
+          agg.title = "表格块 · 第 " + blockRange + " 行 · " + blockChunks.length +
+            " 个表格切片叠加在这一行（源文件里整张表只占一行）· 点击选中第一个：" + firstChunk.id;
+          lanes.appendChild(agg);
+        } else {
+          appendLanes(lanes, barsForRange(block.start, block.end), block.start);
+        }
+
         var tableHtml = null;
         if (block.kind === "pipe") {
           tableHtml = buildPipeTableHtml(block.lines,
-            "管道表 · 第 " + block.start + "–" + block.end + " 行 · 源文件原样解析");
+            blockMeta + " · 源文件原样解析" + blockSuffix);
         } else {
           tableHtml = buildHtmlTablesHtml(block.text,
-            "HTML 表 · 第 " + block.start + "–" + block.end + " 行 · 源文件原样渲染");
+            blockMeta + " · 源文件原样渲染" + blockSuffix);
         }
         if (tableHtml) {
           txt.innerHTML = tableHtml;
