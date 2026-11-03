@@ -731,6 +731,8 @@ body.no-lanes .line .lanes { display: none; }
 
 /* ---------- 表格可视化（管道表 / HTML 表 / table_grid） ---------- */
 .line.table-block { align-items: start; }
+/* 表格块很高：泳道格子必须拉伸到整块高度，否则范围条（绝对定位竖条）高度为 0 不可见 */
+.line.table-block .lanes { align-self: stretch; }
 .line.table-block .no { padding-top: 4px; font-size: 10.5px; color: #8a93a2; }
 .line.table-block .txt { min-width: 0; overflow: hidden; padding: 2px 2px 4px 0; }
 .line.table-cont { display: none; }
