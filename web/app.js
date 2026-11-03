@@ -2374,6 +2374,33 @@
     });
   }
 
+  // 新增块的插入位置（表格行专用）：同一行可能有几百个块，不能按「覆盖该行的最后一块」判断。
+  // 规则：插在选中行上方最近一个已切表格行对应的块之后；上方没有已切行 → 插到该表格块第一块之前。
+  function tableRowInsertAnchor(rows) {
+    if (!rows || !rows.length || !state.doc) return {};
+    var cur = rows[0];
+    while ((cur = cur.previousElementSibling)) {
+      if (cur.dataset.chunk !== undefined) {
+        var aboveChunk = state.doc.chunks[parseInt(cur.dataset.chunk, 10)];
+        if (aboveChunk) return { afterId: aboveChunk.id };
+      }
+    }
+    var blockRow = rows[0].closest(".line.table-block");
+    var block = blockRow ? tableBlockAt(parseInt(blockRow.dataset.line, 10)) : null;
+    if (!block) return {};
+    for (var i = 0; i < state.doc.chunks.length; i++) {
+      var c = state.doc.chunks[i];
+      if (c.span && c.span[1] >= block.start && c.span[0] <= block.end) return { beforeId: c.id };
+    }
+    return {};
+  }
+
+  // 块签名：用于在 add 之后从新列表里认出「刚新增的那一块」（不依赖 diff，因为删除后重建
+  // 会与基线里被删的块内容相似，diff 可能把它判成 modified，added_ids 为空）
+  function chunkSignature(chunk) {
+    return [chunk.chunk || "", chunk.law_num || "", chunk.chunk_kind || ""].join("\u0001");
+  }
+
   function openAdd(picked) {
     if (!state.doc) { showToast("先打开一个文件", "warn"); return; }
     state.opErrEl = el.addErrors;
@@ -2386,21 +2413,28 @@
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
       el.addText.value = picked.text;
-      var hits = chunksInLineRange(picked.start, picked.end);
-      if (hits.length) {
-        state.addAfterId = hits[hits.length - 1].id;
+      if (picked.tableRowsArr && picked.tableRowsArr.length) {
+        // 表格行新增：按行顺序定位插入点（不能用块内 span 相交判断——同一行可能有几百个块）
+        var anchor = tableRowInsertAnchor(picked.tableRowsArr);
+        state.addAfterId = anchor.afterId || null;
+        if (anchor.beforeId) state.addBeforeId = anchor.beforeId;
       } else {
-        // 选区落在没有切片的区域（标题/目录/缺口）：插到它前面最近的切片之后；
-        // 顶部缺口（比所有切片都靠前）则插到第一块之前
-        var prevChunk = null;
-        var firstChunk = null;
-        for (var pi = 0; pi < state.doc.chunks.length; pi++) {
-          var pc = state.doc.chunks[pi];
-          if (!firstChunk && pc.span) firstChunk = pc;
-          if (pc.span && pc.span[1] < picked.start) prevChunk = pc;
+        var hits = chunksInLineRange(picked.start, picked.end);
+        if (hits.length) {
+          state.addAfterId = hits[hits.length - 1].id;
+        } else {
+          // 选区落在没有切片的区域（标题/目录/缺口）：插到它前面最近的切片之后；
+          // 顶部缺口（比所有切片都靠前）则插到第一块之前
+          var prevChunk = null;
+          var firstChunk = null;
+          for (var pi = 0; pi < state.doc.chunks.length; pi++) {
+            var pc = state.doc.chunks[pi];
+            if (!firstChunk && pc.span) firstChunk = pc;
+            if (pc.span && pc.span[1] < picked.start) prevChunk = pc;
+          }
+          state.addAfterId = prevChunk ? prevChunk.id : null;
+          if (!prevChunk && firstChunk) state.addBeforeId = firstChunk.id;
         }
-        state.addAfterId = prevChunk ? prevChunk.id : null;
-        if (!prevChunk && firstChunk) state.addBeforeId = firstChunk.id;
       }
       var rangeLabel = picked.start === picked.end
         ? "第 " + picked.start + " 行"
@@ -2459,15 +2493,24 @@
     if (state.addAfterId) op.after_id = state.addAfterId;
     if (state.addBeforeId) op.before_id = state.addBeforeId;
     if (state.addSpan) op.span = [state.addSpan[0], state.addSpan[1]];
+    // 记录提交前的块签名，用于在返回结果里认出刚新增的那一块
+    var beforeSig = {};
+    (state.doc.chunks || []).forEach(function (c) { beforeSig[chunkSignature(c)] = true; });
     postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
       el.addDialog.close();
       var hadSpan = !!op.span;
       state.addSpan = null;
       state.addBeforeId = null;
       applyDocPayload(doc);
-      // 新建的切片要立刻高亮：按 diff 的 added_ids 选中它，并让原文/右栏同步定位
+      // 新建的切片要立刻高亮：优先 diff.added_ids；删除后重建等场景 diff 可能判成 modified，
+      // 此时用「签名不在提交前集合里」的块兜底，避免看起来「建完没反应」
       var addedIds = (doc.diff && doc.diff.added_ids) || [];
       var addedChunk = addedIds.length ? findChunk(addedIds[0]) : null;
+      if (!addedChunk) {
+        for (var ai = 0; ai < doc.chunks.length; ai++) {
+          if (!beforeSig[chunkSignature(doc.chunks[ai])]) { addedChunk = doc.chunks[ai]; break; }
+        }
+      }
       if (addedChunk) {
         selectChunk(addedChunk, { scrollSource: true, scrollCard: true });
       }
