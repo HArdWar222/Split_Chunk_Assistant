@@ -27,6 +27,7 @@
     addAfterId: null,  // 新增切片的插入位置（null = 末尾）
     addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
     addSpan: null,     // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
+    selTableRows: [],  // 当前选中的表格行（未切片/已切片都算，供「用这些行新增切片」）
     programmaticScroll: 0 // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
   };
 
@@ -767,6 +768,14 @@
           mapped++;
         }
       });
+      // 渲染出来的表格行里，没有被任何表格切片覆盖的行 → 标成「未切片」行，
+      // 让用户一眼看出哪里是缺口，并且可以拖选后右键新增切片。
+      bodyRows.forEach(function (tr) {
+        if (tr.dataset.chunk === undefined) {
+          tr.classList.add("row-gap");
+          tr.title = "这一行没有切片覆盖（可拖选 / 右键用这些行新增切片）";
+        }
+      });
       return mapped;
     }
 
@@ -1107,6 +1116,44 @@
     return base;
   }
 
+  // 选区落在渲染出来的表格行上 → { block, from, to, rows, text, allGap }
+  // 表格行没有源行级坐标，所以 span 用整个表格块的行区间；正文用选中行的单元格文本。
+  function selectedTableRows() {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !state.doc) return null;
+    var range = sel.getRangeAt(0);
+    if (!range || !el.source.contains(range.startContainer) || !el.source.contains(range.endContainer)) return null;
+    var startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    var endEl = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
+    var blockEl = startEl && startEl.closest ? startEl.closest(".line.table-block") : null;
+    if (!blockEl) return null;
+    var endBlock = endEl && endEl.closest ? endEl.closest(".line.table-block") : null;
+    if (endBlock !== blockEl) return null;
+    var block = tableBlockAt(parseInt(blockEl.dataset.line, 10));
+    if (!block) return null;
+    var all = blockEl.querySelectorAll("tbody tr");
+    var picked = [];
+    for (var i = 0; i < all.length; i++) {
+      if (range.intersectsNode(all[i])) picked.push({ tr: all[i], index: i + 1 });
+    }
+    if (!picked.length) return null;
+    var text = picked.map(function (item) {
+      var cells = [];
+      for (var c = 0; c < item.tr.cells.length; c++) cells.push(String(item.tr.cells[c].innerText || "").trim());
+      return cells.join("\t").replace(/^[\t ]+|[\t ]+$/g, "");
+    }).join("\n");
+    var allGap = picked.every(function (item) { return item.tr.dataset.chunk === undefined; });
+    return {
+      block: block,
+      blockEl: blockEl,
+      from: picked[0].index,
+      to: picked[picked.length - 1].index,
+      rows: picked.map(function (item) { return item.tr; }),
+      text: text,
+      allGap: allGap
+    };
+  }
+
   // 选区 → { start, end, text }：行范围 + 按源行重建的纯文本（不含行号/泳道）
   function selectedText() {
     var sel = window.getSelection ? window.getSelection() : null;
@@ -1118,6 +1165,19 @@
     var p1 = { line: lineOfNode(range.startContainer), node: range.startContainer, offset: range.startOffset };
     var p2 = { line: lineOfNode(range.endContainer), node: range.endContainer, offset: range.endOffset };
     if (!p1.line || !p2.line) return null;
+    // 表格行选区：正文取选中行的单元格文本，行区间取整个表格块（源行粒度到不了单元格）
+    var tbl = selectedTableRows();
+    if (tbl) {
+      var tblText = tbl.text;
+      if (tblText.length > 20000) tblText = tblText.slice(0, 20000) + "…";
+      return {
+        start: tbl.block.start,
+        end: tbl.block.end,
+        text: tblText,
+        tableRows: [tbl.from, tbl.to],
+        tableGap: tbl.allGap
+      };
+    }
     if (p1.line > p2.line) { var tmp = p1; p1 = p2; p2 = tmp; }
     var a = p1.line;
     var b = p2.line;
@@ -1355,6 +1415,10 @@
     (state.selHits || []).forEach(function (id) {
       if (state.cardEls[id]) state.cardEls[id].classList.remove("hit");
     });
+    (state.selTableRows || []).forEach(function (tr) {
+      tr.classList.remove("sel-row");
+    });
+    state.selTableRows = [];
     if (state.selRange) {
       for (var n = state.selRange.start; n <= state.selRange.end; n++) {
         var row = state.lineEls[n - 1];
@@ -1366,6 +1430,22 @@
   }
 
   function applySelectionNow() {
+    // 表格行选区（尤其是未切片行）：按表格行 mark，并提示可以右键新增切片
+    var tbl = selectedTableRows();
+    if (tbl) {
+      clearSelectionMarks();
+      state.selTableRows = tbl.rows;
+      tbl.rows.forEach(function (tr) { tr.classList.add("sel-row"); });
+      var label = tbl.from === tbl.to
+        ? ("表格内第 " + tbl.from + " 行")
+        : ("表格内第 " + tbl.from + "–" + tbl.to + " 行");
+      if (tbl.allGap) {
+        setStatus(label + " · 未切片（" + tbl.rows.length + " 行）· 右键可「用这些行新增切片」", "warn");
+      } else {
+        setStatus(label + " · 已选 " + tbl.rows.length + " 行 · 右键可新增切片或选中对应切片", "ok");
+      }
+      return;
+    }
     var range = selectedLineRange();
     var hadMarks = (state.selHits && state.selHits.length) || state.selRange;
     clearSelectionMarks();
@@ -1541,6 +1621,19 @@
           return;
         }
       }
+      var gapTr = ev.target.closest(".line.table-block tbody tr");
+      if (gapTr && gapTr.dataset.chunk === undefined) {
+        // 未切片的表格行：把这行内容设为选区，交给 applySelectionNow 统一标记与提示
+        var gSel = window.getSelection ? window.getSelection() : null;
+        if (gSel) {
+          var gRange = document.createRange();
+          gRange.selectNodeContents(gapTr);
+          gSel.removeAllRanges();
+          gSel.addRange(gRange);
+        }
+        scheduleSelectionCheck();
+        return;
+      }
       var trow = ev.target.closest("tr[data-chunk]");
       if (trow) {
         var tidx = parseInt(trow.dataset.chunk, 10);
@@ -1581,6 +1674,23 @@
   }
 
   // ---------- 右键上下文菜单：原文选区 ↔ 切片操作 ----------
+  function placeCtxMenu(ev) {
+    ev.preventDefault();
+    el.ctxMenu.hidden = false;
+    el.ctxMenu.style.left = "0px";
+    el.ctxMenu.style.top = "0px";
+    var w = el.ctxMenu.offsetWidth || 230;
+    var h = el.ctxMenu.offsetHeight || 280;
+    var x = ev.clientX || 0;
+    var y = ev.clientY || 0;
+    var maxX = (window.innerWidth || 1280) - w - 8;
+    var maxY = (window.innerHeight || 800) - h - 8;
+    if (x > maxX) x = Math.max(8, maxX);
+    if (y > maxY) y = Math.max(8, maxY);
+    el.ctxMenu.style.left = x + "px";
+    el.ctxMenu.style.top = y + "px";
+  }
+
   function chunkAtLine(line) {
     var doc = state.doc;
     if (!doc || !line) return null;
@@ -1650,6 +1760,58 @@
     el.ctxMenu.innerHTML = "";
     var count = 0;
     var doc = state.doc;
+
+    // 表格行选区 / 右键落在未切片表格行 → 专用菜单：用这些行新增切片
+    var tblSel = selectedTableRows();
+    var gapTrInfo = null;
+    if (!tblSel) {
+      var gapTr = ev.target && ev.target.closest ? ev.target.closest(".line.table-block tbody tr") : null;
+      if (gapTr && gapTr.dataset.chunk === undefined) {
+        var gapBlockEl = gapTr.closest(".line.table-block");
+        var gapBlock = gapBlockEl ? tableBlockAt(parseInt(gapBlockEl.dataset.line, 10)) : null;
+        if (gapBlock) {
+          var allGapRows = gapBlockEl.querySelectorAll("tbody tr");
+          var gapIdx = 1;
+          for (var gi = 0; gi < allGapRows.length; gi++) {
+            if (allGapRows[gi] === gapTr) { gapIdx = gi + 1; break; }
+          }
+          var gapCells = [];
+          for (var gc = 0; gc < gapTr.cells.length; gc++) gapCells.push(String(gapTr.cells[gc].innerText || "").trim());
+          gapTrInfo = { block: gapBlock, from: gapIdx, to: gapIdx, rows: [gapTr], text: gapCells.join("\t"), allGap: true };
+        }
+      }
+    }
+    var rowSel = tblSel || gapTrInfo;
+    if (rowSel) {
+      var rowLabel = rowSel.from === rowSel.to
+        ? ("表格内第 " + rowSel.from + " 行")
+        : ("表格内第 " + rowSel.from + "–" + rowSel.to + " 行");
+      el.ctxMenu.appendChild(ctxItem(
+        rowSel.allGap ? ("ℹ " + rowLabel + " 没有切片覆盖") : ("ℹ " + rowLabel + " · 已选 " + rowSel.rows.length + " 行"),
+        rowSel.allGap ? "未切片区域 · 可新增切片" : "表格行选区",
+        null,
+        true
+      ));
+      var gapText = rowSel.text;
+      if (gapText.length > 20000) gapText = gapText.slice(0, 20000) + "…";
+      el.ctxMenu.appendChild(ctxItem(
+        rowSel.from === rowSel.to ? "✚ 用这一行新增切片" : "✚ 用选中的表格行新增切片",
+        rowLabel + " · " + gapText.length + " 字",
+        (function (info, txt) {
+          return function () {
+            openAdd({
+              start: info.block.start,
+              end: info.block.end,
+              text: txt,
+              tableRows: [info.from, info.to],
+              tableGap: info.allGap
+            });
+          };
+        })(rowSel, gapText)
+      ));
+      placeCtxMenu(ev);
+      return;
+    }
 
     if (plan) {
       el.ctxMenu.appendChild(ctxItem(
@@ -1738,20 +1900,7 @@
     }
 
     if (!count) { hideCtxMenu(); return; }
-    ev.preventDefault();
-    el.ctxMenu.hidden = false;
-    el.ctxMenu.style.left = "0px";
-    el.ctxMenu.style.top = "0px";
-    var w = el.ctxMenu.offsetWidth || 230;
-    var h = el.ctxMenu.offsetHeight || 280;
-    var x = ev.clientX || 0;
-    var y = ev.clientY || 0;
-    var maxX = (window.innerWidth || 1280) - w - 8;
-    var maxY = (window.innerHeight || 800) - h - 8;
-    if (x > maxX) x = Math.max(8, maxX);
-    if (y > maxY) y = Math.max(8, maxY);
-    el.ctxMenu.style.left = x + "px";
-    el.ctxMenu.style.top = y + "px";
+    placeCtxMenu(ev);
   }
 
   // ---------- P2：人工编辑（拆 / 并 / 删 / 增 / 改 + 撤销重做） ----------
@@ -2124,8 +2273,17 @@
       var rangeLabel = picked.start === picked.end
         ? "第 " + picked.start + " 行"
         : "第 " + picked.start + "–" + picked.end + " 行";
-      el.addHint.textContent = "已带入原文" + rangeLabel + "的选区（" + picked.text.length +
-        " 字），新增块会定位到这几行；可继续编辑正文。";
+      if (picked.tableRows) {
+        var trLabel = picked.tableRows[0] === picked.tableRows[1]
+          ? ("表格内第 " + picked.tableRows[0] + " 行")
+          : ("表格内第 " + picked.tableRows[0] + "–" + picked.tableRows[1] + " 行");
+        el.addHint.textContent = "已带入" + trLabel + "（" + picked.text.length + " 字" +
+          (picked.tableGap ? "，这部分没有切片覆盖" : "") + "）；行区间记到整个表格块（原文" +
+          rangeLabel + "），新增块会定位到该表格块的位置。";
+      } else {
+        el.addHint.textContent = "已带入原文" + rangeLabel + "的选区（" + picked.text.length +
+          " 字），新增块会定位到这几行；可继续编辑正文。";
+      }
       el.addHint.hidden = false;
     } else {
       state.addSpan = null;
