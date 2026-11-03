@@ -20,6 +20,9 @@
     selRange: null,    // 当前选区行范围 {start, end}（1-based 闭区间）
     tables: null,      // /api/tables 载荷：chunk id -> table_grid（懒加载）
     tableBlocks: [],   // 原文里被渲染成表格的行区间 [{start, end, el}]
+    tableRows: {},     // 渲染后的表格行：chunk id -> [tr, ...]（按 law_num「第X-Y行」映射）
+    hlRows: [],        // 当前高亮的表格行
+    rowActive: [],     // 当前选中切片对应的表格行
     pendingChunk: null,// 当前弹层操作的切片
     addAfterId: null,  // 新增切片的插入位置（null = 末尾）
     addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
@@ -586,6 +589,9 @@
     state.selHits = [];
     state.selRange = null;
     state.tableBlocks = [];
+    state.tableRows = {};
+    state.hlRows = [];
+    state.rowActive = [];
     renderSource(doc);
     renderChunks(doc);
     renderDocMeta(doc);
@@ -681,6 +687,88 @@
       return out;
     }
 
+    // 表格切片的 law_num 里带「表1 第X-Y行」：把渲染出来的表格行按所属切片着色，
+    // 点行即选中该切片；悬停行只联动对应卡片（否则整块几百张卡片一起 related 会很卡）。
+    var TABLE_ROW_RE = /第\s*(\d+)\s*[-–—~～]\s*(\d+)\s*行/;
+
+    function tableRowRange(chunk) {
+      if (chunk.chunk_kind !== "table" && chunk.chunk_kind !== "appendix") return null;
+      var m = TABLE_ROW_RE.exec(chunk.law_num || "");
+      if (!m) return null;
+      var a = parseInt(m[1], 10);
+      var b = parseInt(m[2], 10);
+      if (!isFinite(a) || !isFinite(b) || a < 1 || b < a) return null;
+      return { start: a, end: b };
+    }
+
+    function rowHue(idx) {
+      return Math.round((idx * 137.508) % 360);
+    }
+
+    // 把 blockChunks（chunk 下标数组）对应的行区间映射到渲染出的 tr 上，返回映射成功的行数
+    function annotateTableRows(blockChunks, txtEl) {
+      var table = txtEl.querySelector("table");
+      if (!table) return 0;
+      var bodyRows = [];
+      if (table.tBodies && table.tBodies.length) {
+        for (var t = 0; t < table.tBodies.length; t++) {
+          var rows = table.tBodies[t].rows;
+          for (var ri = 0; ri < rows.length; ri++) bodyRows.push(rows[ri]);
+        }
+      } else {
+        for (var rj = 0; rj < table.rows.length; rj++) bodyRows.push(table.rows[rj]);
+      }
+      if (!bodyRows.length) return 0;
+      // 行号 → tr 的偏移：表头在 thead 时不偏移；表头混在 tbody 里时跳过第一行。
+      // 源 HTML 表常把表头写成 <tr><td>…</td></tr>（无 th），用「首行无合并单元格、后面行有」
+      // 和「行号上界 == tbody 行数」两个信号判断首行是不是表头。
+      var offset = 0;
+      if (!table.tHead) {
+        var first = bodyRows[0];
+        var headerHint = !!(first && first.cells.length && first.cells[0].tagName === "TH");
+        if (!headerHint && bodyRows.length > 1) {
+          var firstHasSpan = Array.prototype.some.call(first.cells, function (c) {
+            return c.rowSpan > 1 || c.colSpan > 1;
+          });
+          var laterHasSpan = false;
+          for (var bri = 1; bri < bodyRows.length && !laterHasSpan; bri++) {
+            laterHasSpan = Array.prototype.some.call(bodyRows[bri].cells, function (c) {
+              return c.rowSpan > 1 || c.colSpan > 1;
+            });
+          }
+          if (!firstHasSpan && laterHasSpan) headerHint = true;
+        }
+        var maxEnd = 0;
+        blockChunks.forEach(function (idx) {
+          var rr = tableRowRange(doc.chunks[idx]);
+          if (rr && rr.end > maxEnd) maxEnd = rr.end;
+        });
+        if (maxEnd === bodyRows.length) headerHint = false;
+        if (maxEnd > 0 && maxEnd <= bodyRows.length - 1) headerHint = true;
+        offset = headerHint ? 1 : 0;
+      }
+      var mapped = 0;
+      blockChunks.forEach(function (idx) {
+        var chunk = doc.chunks[idx];
+        var range = tableRowRange(chunk);
+        if (!range) return;
+        var hue = rowHue(idx);
+        for (var n = range.start; n <= range.end; n++) {
+          var tr = bodyRows[n - 1 + offset];
+          if (!tr) continue;
+          tr.classList.add("chunk-row");
+          tr.dataset.chunk = String(idx);
+          tr.style.setProperty("--row-hue", String(hue));
+          tr.title = "切片 #" + (idx + 1) + " · " + chunk.id + " · " + (chunk.law_num || "") +
+            " · 点击选中该切片";
+          if (!state.tableRows[chunk.id]) state.tableRows[chunk.id] = [];
+          state.tableRows[chunk.id].push(tr);
+          mapped++;
+        }
+      });
+      return mapped;
+    }
+
     function appendLanes(lanesEl, bars, lineNo) {
       Object.keys(bars).forEach(function (key) {
         var cell = bars[key];
@@ -751,6 +839,7 @@
         if (tableHtml) {
           txt.innerHTML = tableHtml;
           row.className += " table-rendered";
+          annotateTableRows(blockChunks, txt);
         } else {
           txt.textContent = line.text || "";
         }
@@ -922,6 +1011,13 @@
         }
       }
     });
+    // 表格内部行级高亮：只高亮该切片对应的行（点表格行/悬停卡片时最直观）
+    var tRows = (state.tableRows && state.tableRows[chunk.id]) || [];
+    var rowCls = strong ? "row-hl" : "row-hl-soft";
+    tRows.forEach(function (tr) {
+      tr.classList.add(rowCls);
+      state.hlRows.push(tr);
+    });
   }
 
   function clearLineHighlight() {
@@ -929,6 +1025,10 @@
       state.hlEls[i].classList.remove("hl", "hl-soft");
     }
     state.hlEls = [];
+    for (var k = 0; k < state.hlRows.length; k++) {
+      state.hlRows[k].classList.remove("row-hl", "row-hl-soft");
+    }
+    state.hlRows = [];
   }
 
   function highlightRelatedCards(line, endLine) {
@@ -1352,6 +1452,18 @@
     var card = state.cardEls[chunk.id];
     if (card) card.classList.add("active");
     highlightLines(chunk, true);
+    // 表格内部行：选中对应的行，并在表格容器内滚到可见
+    state.rowActive.forEach(function (tr) { tr.classList.remove("row-active"); });
+    state.rowActive = [];
+    var activeRows = (state.tableRows && state.tableRows[chunk.id]) || [];
+    activeRows.forEach(function (tr) {
+      tr.classList.add("row-active");
+      state.rowActive.push(tr);
+    });
+    if (activeRows.length) {
+      var wrap = activeRows[0].closest(".tblwrap");
+      if (wrap) wrap.scrollTop = Math.max(0, activeRows[0].offsetTop - wrap.clientHeight / 2);
+    }
     if (opts.scrollSource && chunk.span) scrollToLine(chunk.span[0]);
     if (opts.scrollCard) scrollToCard(chunk.id);
     setStatus("已选中 " + chunk.id + " · " + (ALIGN_LABEL[chunk.align] || chunk.align) +
@@ -1376,6 +1488,18 @@
     });
 
     el.source.addEventListener("mouseover", function (ev) {
+      var trow = ev.target.closest("tr[data-chunk]");
+      if (trow) {
+        var tidx = parseInt(trow.dataset.chunk, 10);
+        var tchunk = state.doc && state.doc.chunks[tidx];
+        if (tchunk) {
+          state.hoverLine = null;
+          clearRelatedCards();
+          if (state.cardEls[tchunk.id]) state.cardEls[tchunk.id].classList.add("related");
+          state.cardEls._related = [tchunk.id];
+          return;
+        }
+      }
       var row = ev.target.closest(".line");
       if (!row) return;
       var line = parseInt(row.dataset.line, 10);
@@ -1385,9 +1509,18 @@
       highlightRelatedCards(line, end);
     });
     el.source.addEventListener("mouseout", function (ev) {
+      var trow = ev.target.closest("tr[data-chunk]");
+      if (trow) {
+        if (ev.relatedTarget && trow.contains(ev.relatedTarget)) return;
+        clearRelatedCards();
+        return;
+      }
       var row = ev.target.closest(".line");
       if (!row) return;
-      if (ev.relatedTarget && el.source.contains(ev.relatedTarget) && ev.relatedTarget.closest(".line")) return;
+      if (ev.relatedTarget && el.source.contains(ev.relatedTarget) && ev.relatedTarget.closest(".line")) {
+        var nextRow = ev.relatedTarget.closest(".line");
+        if (row === nextRow) return;
+      }
       state.hoverLine = null;
       clearRelatedCards();
     });
@@ -1397,6 +1530,15 @@
         var hit = state.doc && state.doc.chunks[parseInt(bar.dataset.chunk, 10)];
         if (hit) {
           selectChunk(hit, { scrollSource: false, scrollCard: true });
+          return;
+        }
+      }
+      var trow = ev.target.closest("tr[data-chunk]");
+      if (trow) {
+        var tidx = parseInt(trow.dataset.chunk, 10);
+        var tchunk = state.doc && state.doc.chunks[tidx];
+        if (tchunk) {
+          selectChunk(tchunk, { scrollSource: false, scrollCard: true });
           return;
         }
       }

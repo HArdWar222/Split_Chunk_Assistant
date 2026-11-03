@@ -799,6 +799,26 @@ body.no-lanes .line .lanes { display: none; }
 .grid-table tbody tr:nth-child(even) td { background: #fafbfc; }
 .grid-table tr.noterow td { background: #fff8e8; color: #6b4a00; font-style: italic; }
 
+/* 表格内部按切片着色：每个表格切片覆盖的行区间涂上它自己的颜色，点行选中切片 */
+.grid-table tbody tr.chunk-row { cursor: pointer; }
+.grid-table tbody tr.chunk-row td {
+  background: hsla(var(--row-hue, 210), 70%, 55%, 0.10);
+}
+.grid-table tbody tr.chunk-row td:first-child {
+  border-left: 3px solid hsl(var(--row-hue, 210), 65%, 45%);
+}
+.grid-table tbody tr.chunk-row:hover td {
+  background: hsla(var(--row-hue, 210), 75%, 55%, 0.24);
+}
+.grid-table tbody tr.chunk-row.row-hl td,
+.grid-table tbody tr.chunk-row.row-hl-soft td {
+  box-shadow: inset 0 0 0 1px hsl(var(--row-hue, 210), 65%, 45%);
+}
+.grid-table tbody tr.chunk-row.row-active td {
+  background: hsla(var(--row-hue, 210), 80%, 55%, 0.32);
+  box-shadow: inset 0 0 0 2px hsl(var(--row-hue, 210), 70%, 42%);
+}
+
 /* 切片卡片里的表格正文容器 */
 .chunk-content { margin: 6px 0 4px; }
 .chunk-content .chunk-body { margin: 0; max-height: 240px; }
