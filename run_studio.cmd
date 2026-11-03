@@ -1,24 +1,44 @@
 @echo off
-rem SplitChunkAssistant 启动脚本（Windows）
-rem 用法：run_studio.cmd            默认端口 8790，自动打开浏览器
-rem       run_studio.cmd --no-open  不自动打开浏览器
-rem       run_studio.cmd --port 8801 --chunks-dir "D:\data\chunks_v2"
+rem SplitChunkAssistant launcher (Windows).
+rem ASCII only + CRLF line endings - do not add non-ASCII characters to this file,
+rem cmd.exe reads batch files with the OEM codepage and UTF-8 text breaks parsing.
+rem
+rem Usage:
+rem   run_studio.cmd                       default port 8790, opens browser
+rem   run_studio.cmd --no-open             do not open browser
+rem   run_studio.cmd --port 8801 --chunks-dir "D:\data\chunks_v2"
 setlocal
 cd /d "%~dp0"
-
+chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 
-where python >nul 2>nul
-if errorlevel 1 (
-  echo [x] 找不到 python，请先安装 Python 3.10+ 并加入 PATH
+set "PY="
+where python >nul 2>nul && set "PY=python"
+if not defined PY (
+  where py >nul 2>nul && set "PY=py -3"
+)
+if not defined PY (
+  echo [x] Python not found in PATH.
+  echo     Install Python 3.10+ from https://www.python.org/downloads/
+  echo     and tick "Add python.exe to PATH" during install.
+  pause
   exit /b 2
 )
 
-python -m chunk_studio.server %*
+%PY% -c "import sys" >nul 2>nul
+if errorlevel 1 (
+  echo [x] Python found but cannot run: %PY%
+  pause
+  exit /b 2
+)
+
+%PY% -m chunk_studio.server %*
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
   echo.
-  echo [x] 服务异常退出，退出码 %RC%
+  echo [x] Server exited with code %RC%
+  echo     If the port is already taken, try: run_studio.cmd --port 8801
+  pause
 )
 endlocal & exit /b %RC%

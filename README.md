@@ -107,6 +107,13 @@ set FAC_ROOT=C:\Users\QiuYe\Desktop\FAC-RAG
 python -m chunk_studio.server --port 8790 --open
 ```
 
+启动脚本说明（2026-11-03 修复）：
+
+- `run_studio.cmd` 是 **纯 ASCII + CRLF** 的批处理文件。此前版本是 UTF-8 + LF，cmd.exe 按 OEM 代码页读会把中文注释行拆坏、报「'默认端口' 不是内部或外部命令」，现已重写；
+- 脚本会自动找 `python`（找不到再试 `py -3`），失败时窗口会 `pause` 停住显示原因，不再一闪而过；
+- 如果 8790 上**已经有本工具在跑**，脚本会识别出来并直接打开浏览器（退出码 0），不会报端口占用；
+- 想换端口：`run_studio.cmd --port 8801`（或页面「⚙ 设置」里改）。
+
 浏览器打开 http://127.0.0.1:8790 ：
 
 - 左侧 97 个法规文件（分组 / 搜索 / 块数 / gate 徽章），点击打开三栏；
@@ -132,10 +139,10 @@ python -m chunk_studio.server --port 8790 --open
 }
 ```
 
-P1 的验收口径（单测覆盖）：
+验收 / 自测口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 92 个测试
+python -m unittest discover -s tests -t . -v   :: 115 个测试
 ```
 
 - `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60
@@ -167,7 +174,7 @@ P1 只消费 FAC-RAG **已切好的 JSON**（`_manifest.json` + `*.jsonl` + `_ex
 ```
 Split_assistant/
 ├── README.md                 ← 本文件
-├── run_studio.cmd            ← Windows 一键启动（P0）
+├── run_studio.cmd            ← Windows 一键启动（ASCII + CRLF，可识别已在跑的实例）
 ├── chunk_studio/             ← 后端包（纯 stdlib：config/manifest/fac_bridge/studio/api/server）
 ├── web/                      ← 前端单页（index.html / app.js / style.css）
 ├── tests/                    ← 单测（配置 / manifest / 产物桥 / API / 真实语料）

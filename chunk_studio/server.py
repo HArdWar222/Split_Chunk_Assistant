@@ -20,6 +20,7 @@ from pathlib import Path
 from .api import App
 from .config import Config, ConfigError, DEFAULT_PORT
 from .studio import Studio
+from . import __phase__, __version__
 
 MAX_BODY_BYTES = 1024 * 1024
 
@@ -81,8 +82,15 @@ def make_handler(app: App):
     return _Handler
 
 
+class _StudioHTTPServer(ThreadingHTTPServer):
+    """关闭 SO_REUSEADDR：Windows 下允许复用会让第二个实例静默绑定同一端口。"""
+
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def build_server(app: App, host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(app))
+    return _StudioHTTPServer((host, port), make_handler(app))
 
 
 def _open_browser_later(url: str, delay: float = 0.6) -> None:
@@ -96,6 +104,22 @@ def _open_browser_later(url: str, delay: float = 0.6) -> None:
             pass
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def _existing_instance(port: int, host: str = "127.0.0.1") -> str | None:
+    """如果该端口上已有本工具在跑，返回它的 URL；否则返回 None。"""
+    import json as _json
+    import urllib.request
+
+    url = f"http://{host}:{port}/api/health"
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as resp:  # noqa: S310 - 本机地址
+            data = _json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - 连不上/不是本工具都算「没有」
+        return None
+    if isinstance(data, dict) and data.get("app") == "SplitChunkAssistant":
+        return f"http://{host}:{port}/"
+    return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -128,26 +152,35 @@ def main(argv: list[str] | None = None) -> int:
             studio.reload()
         port = int(args.port or studio.cfg.port)
     except ConfigError as exc:
-        print(f"配置错误：{exc}", file=sys.stderr)
+        print(f"配置错误：{exc}", file=sys.stderr, flush=True)
         return 2
 
     app = App(studio)
+    running = _existing_instance(port)
+    if running:
+        print(f"127.0.0.1:{port} 上已经有一个 SplitChunkAssistant 在运行：{running}", flush=True)
+        print("  已直接为你打开浏览器；如需再开一个实例，请换端口，例如：", flush=True)
+        print(f"  python -m chunk_studio.server --port {port + 1}", flush=True)
+        if args.open_browser:
+            _open_browser_later(running, delay=0.2)
+        return 0
     try:
         httpd = build_server(app, "127.0.0.1", port)
     except OSError as exc:
-        print(f"无法监听 127.0.0.1:{port}：{exc}", file=sys.stderr)
+        print(f"无法监听 127.0.0.1:{port}：{exc}", file=sys.stderr, flush=True)
+        print(f"  该端口可能被其它程序占用，换个端口试试：--port {port + 1}", file=sys.stderr, flush=True)
         return 2
 
     url = f"http://127.0.0.1:{port}/"
-    print(f"SplitChunkAssistant P0 已启动：{url}")
-    print(f"  切块产物：{studio.cfg.chunks_dir}")
+    print(f"SplitChunkAssistant {__version__}（{__phase__}）已启动：{url}", flush=True)
+    print(f"  切块产物：{studio.cfg.chunks_dir}", flush=True)
     files = studio.files_payload()
     if files.get("ok"):
         totals = files.get("totals") or {}
-        print(f"  文件 {totals.get('n_files')} 个 / 切块 {totals.get('n_chunks')} 条")
+        print(f"  文件 {totals.get('n_files')} 个 / 切块 {totals.get('n_chunks')} 条", flush=True)
     else:
-        print(f"  [!] 产物不可用：{files.get('error')}")
-        print("      可在页面「设置」里修改路径后保存，立即生效。")
+        print(f"  [!] 产物不可用：{files.get('error')}", flush=True)
+        print("      可在页面「设置」里修改路径后保存，立即生效。", flush=True)
 
     if args.open_browser:
         _open_browser_later(url)
