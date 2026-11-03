@@ -305,6 +305,19 @@ class DropAddPatchTest(unittest.TestCase):
         out2 = apply_ops(base_chunks(), [{"op": "add", "text": "插在中间", "after_id": "测试法-0001"}], law_name=LAW)
         self.assertEqual(out2[1]["chunk"], "插在中间")
 
+    def test_add_before_first(self):
+        # 原文顶部缺口新增：插到第一块之前，id 仍是 max_seq+1，顺序在列表最前
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "add", "text": "标题位置新增", "before_id": "测试法-0001", "span": [1, 2]}],
+            law_name=LAW,
+        )
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[0]["chunk"], "标题位置新增")
+        self.assertEqual(out[0]["id"], "测试法-0004")
+        self.assertEqual(out[0]["span"], [1, 2])
+        self.assertEqual(out[1]["id"], "测试法-0001")
+
     def test_add_errors(self):
         with self.assertRaises(OpError):
             apply_ops(base_chunks(), [{"op": "add", "text": "   "}], law_name=LAW)

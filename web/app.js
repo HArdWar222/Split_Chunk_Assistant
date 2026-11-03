@@ -20,6 +20,7 @@
     selRange: null,    // 当前选区行范围 {start, end}（1-based 闭区间）
     pendingChunk: null,// 当前弹层操作的切片
     addAfterId: null,  // 新增切片的插入位置（null = 末尾）
+    addBeforeId: null, // 新增切片插到某块之前（用于原文顶部缺口，null = 不用）
     addSpan: null      // 新增切片来自原文选区时的行区间 [start, end]（1-based 闭区间）
   };
 
@@ -1012,6 +1013,8 @@
     // 右键：在原文选区/切片上弹出上下文工作栏
     el.source.addEventListener("contextmenu", function (ev) {
       showSplitCaret(ev);
+      // 右键以菜单为主，隐藏上方气泡提示，避免「不可拆分」等文案干扰
+      el.splitHint.hidden = true;
       openContextMenu(ev);
     });
   }
@@ -1020,11 +1023,15 @@
   function chunkAtLine(line) {
     var doc = state.doc;
     if (!doc || !line) return null;
+    var best = null;
+    var bestLen = Infinity;
     for (var i = 0; i < doc.chunks.length; i++) {
       var c = doc.chunks[i];
-      if (c.span && c.span[0] <= line && line <= c.span[1]) return c;
+      if (!c.span || c.span[0] > line || line > c.span[1]) continue;
+      var len = c.span[1] - c.span[0];
+      if (len < bestLen) { best = c; bestLen = len; }
     }
-    return null;
+    return best;
   }
 
   function hideCtxMenu() {
@@ -1053,7 +1060,7 @@
       ev.preventDefault();
       ev.stopPropagation();
       hideCtxMenu();
-      action();
+      if (typeof action === "function") action();
     });
     return btn;
   }
@@ -1123,17 +1130,29 @@
     if (target) {
       var idx = doc.chunks.indexOf(target);
       if (count) el.ctxMenu.appendChild(ctxSep());
+      var rangeHint = target.span
+        ? ("原文第 " + target.span[0] + "–" + target.span[1] + " 行")
+        : "未对齐";
+      el.ctxMenu.appendChild(ctxItem("✎ 编辑此切片正文 / 条号…", target.id + " · " + rangeHint, function () { openEdit(target); }));
       el.ctxMenu.appendChild(ctxItem("✂ 拆分此切片…", target.id, function () { openSplit(target); }));
-      el.ctxMenu.appendChild(ctxItem("✎ 修改正文 / 条号…", target.id, function () { openEdit(target); }));
       el.ctxMenu.appendChild(ctxItem("⤴ 并入上一块", "", function () { mergeChunk(target, "prev"); }, idx <= 0));
       el.ctxMenu.appendChild(ctxItem("⤵ 并入下一块", "", function () { mergeChunk(target, "next"); }, idx >= doc.chunks.length - 1));
       el.ctxMenu.appendChild(ctxItem("✕ 删除此切片", target.id, function () { dropChunk(target); }));
       el.ctxMenu.appendChild(ctxSep());
-      el.ctxMenu.appendChild(ctxItem("◎ 定位到切片", target.span
-        ? ("原文第 " + target.span[0] + "–" + target.span[1] + " 行")
-        : "未对齐", function () {
+      el.ctxMenu.appendChild(ctxItem("◎ 定位到切片", rangeHint, function () {
         selectChunk(target, { scrollSource: true, scrollCard: true });
       }));
+      count++;
+    } else if (line >= 1) {
+      // 右键落在没有切片覆盖的原文行（标题/目录/空行/未对齐区域）：
+      // 依然弹出菜单，给出说明与「用这一行新增切片」，避免用户以为右键坏了。
+      var rowText = doc.lines && doc.lines[line - 1] ? String(doc.lines[line - 1].text || "") : "";
+      if (count) el.ctxMenu.appendChild(ctxSep());
+      el.ctxMenu.appendChild(ctxItem("ℹ 第 " + line + " 行不属于任何切片", "标题 / 目录 / 空行 / 未对齐区域", null, true));
+      if (rowText.trim()) {
+        el.ctxMenu.appendChild(ctxItem("✚ 用这一行新增切片", "第 " + line + " 行 · " + rowText.length + " 字",
+          function () { openAdd({ start: line, end: line, text: rowText }); }));
+      }
       count++;
     }
 
@@ -1497,11 +1516,26 @@
 
     // 如果原文里有选区（或右键菜单带入了选区）：把选区文本带进弹层，并记下行区间
     if (!picked || typeof picked.start !== "number") picked = selectedText();
+    state.addBeforeId = null;
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
       el.addText.value = picked.text;
       var hits = chunksInLineRange(picked.start, picked.end);
-      state.addAfterId = hits.length ? hits[hits.length - 1].id : (state.activeChunk || null);
+      if (hits.length) {
+        state.addAfterId = hits[hits.length - 1].id;
+      } else {
+        // 选区落在没有切片的区域（标题/目录/缺口）：插到它前面最近的切片之后；
+        // 顶部缺口（比所有切片都靠前）则插到第一块之前
+        var prevChunk = null;
+        var firstChunk = null;
+        for (var pi = 0; pi < state.doc.chunks.length; pi++) {
+          var pc = state.doc.chunks[pi];
+          if (!firstChunk && pc.span) firstChunk = pc;
+          if (pc.span && pc.span[1] < picked.start) prevChunk = pc;
+        }
+        state.addAfterId = prevChunk ? prevChunk.id : null;
+        if (!prevChunk && firstChunk) state.addBeforeId = firstChunk.id;
+      }
       var rangeLabel = picked.start === picked.end
         ? "第 " + picked.start + " 行"
         : "第 " + picked.start + "–" + picked.end + " 行";
@@ -1535,11 +1569,13 @@
       chunk_kind: el.addKind.value
     };
     if (state.addAfterId) op.after_id = state.addAfterId;
+    if (state.addBeforeId) op.before_id = state.addBeforeId;
     if (state.addSpan) op.span = [state.addSpan[0], state.addSpan[1]];
     postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
       el.addDialog.close();
       var hadSpan = !!op.span;
       state.addSpan = null;
+      state.addBeforeId = null;
       applyDocPayload(doc);
       showToast(hadSpan ? "已按原文选区新增一块" : "已新增一块", "ok");
     }).catch(function (err) {

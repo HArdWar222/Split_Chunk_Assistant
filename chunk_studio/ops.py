@@ -404,9 +404,15 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None, source_line
     if kind not in CHUNK_KINDS:
         raise OpError(f"chunk_kind 非法：{kind!r}（可选 {sorted(CHUNK_KINDS)}）")
 
-    # 插入位置：after_id 之后；不传则追加到末尾（用最后一块作条号参照）
+    # 插入位置：after_id 之后 / before_id 之前；都不传则追加到末尾
     after_id = op.get("after_id")
-    insert_at = len(chunks) if after_id is None else find_index(chunks, after_id) + 1
+    before_id = op.get("before_id")
+    if after_id is not None:
+        insert_at = find_index(chunks, after_id) + 1
+    elif before_id is not None:
+        insert_at = find_index(chunks, before_id)
+    else:
+        insert_at = len(chunks)
 
     law_num = str(op.get("law_num") or "").strip()
     if not law_num:
