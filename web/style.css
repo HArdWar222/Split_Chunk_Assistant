@@ -868,3 +868,5 @@ body.no-lanes .line .lanes { display: none; }
   overflow: auto;
 }
 
+/* 编辑后重渲染时由 JS 精确恢复滚动位置，关闭浏览器自动滚动锚定，避免几像素漂移 */
+#source, #chunks { overflow-anchor: none; }

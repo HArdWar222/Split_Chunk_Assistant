@@ -2207,12 +2207,52 @@
       : "";
   }
 
+  // 编辑会重建原文 DOM，表格内部的滚动容器（.tblwrap）默认回到顶部；
+  // 这里在重渲染前后按「表格块起始行 / 卡片 id」记录并恢复内部 scrollTop。
+  function captureTableWrapTops() {
+    var tops = { source: {}, cards: {} };
+    if (el.source) {
+      el.source.querySelectorAll(".line.table-block").forEach(function (block) {
+        var wrap = block.querySelector(".tblwrap");
+        if (wrap && wrap.scrollTop) tops.source[block.dataset.line] = wrap.scrollTop;
+      });
+    }
+    if (el.chunks) {
+      el.chunks.querySelectorAll(".chunk-card").forEach(function (card) {
+        var wrap = card.querySelector(".tblwrap");
+        if (wrap && wrap.scrollTop) tops.cards[card.dataset.id] = wrap.scrollTop;
+      });
+    }
+    return tops;
+  }
+
+  function restoreTableWrapTops(tops) {
+    if (!tops) return;
+    if (el.source) {
+      el.source.querySelectorAll(".line.table-block").forEach(function (block) {
+        var top = tops.source[block.dataset.line];
+        if (!top) return;
+        var wrap = block.querySelector(".tblwrap");
+        if (wrap) wrap.scrollTop = top;
+      });
+    }
+    if (el.chunks) {
+      el.chunks.querySelectorAll(".chunk-card").forEach(function (card) {
+        var top = tops.cards[card.dataset.id];
+        if (!top) return;
+        var wrap = card.querySelector(".tblwrap");
+        if (wrap) wrap.scrollTop = top;
+      });
+    }
+  }
+
   // 编辑后重渲染，尽量保持滚动位置与选中切片
   function applyDocPayload(doc) {
     hideSplitCaret();
     var activeId = state.activeChunk;
     var sourceTop = el.source.scrollTop;
     var chunksTop = el.chunks.scrollTop;
+    var wrapTops = captureTableWrapTops();
     state.doc = doc;
     state.docKey = doc.key;
     state.activeChunk = null;
@@ -2224,6 +2264,14 @@
       var chunk = findChunk(activeId);
       if (chunk) selectChunk(chunk, { scrollSource: false, scrollCard: false });
     }
+    // 恢复表格内部滚动位置（放在 selectChunk 之后：删除/撤销这类没有新选中的操作保持原位置）
+    restoreTableWrapTops(wrapTops);
+    // 浏览器滚动锚定/卡片高度变化可能让 scrollTop 漂几像素，下一帧再对齐一次
+    requestAnimationFrame(function () {
+      el.source.scrollTop = sourceTop;
+      el.chunks.scrollTop = chunksTop;
+      restoreTableWrapTops(wrapTops);
+    });
     setStatus("已应用编辑 · " + fmtInt(doc.stats.n_chunks) + " 块 · 未保存（P3 落盘）", "ok");
   }
 
@@ -2281,8 +2329,12 @@
 
   function dropChunk(chunk) {
     if (!chunk) return;
+    var droppedId = chunk.id;
     state.activeChunk = null;
-    postOp({ op: "drop", id: chunk.id }, "已删除 " + chunk.id + "（Ctrl+Z 可撤销）");
+    postOp({ op: "drop", id: droppedId }, "已删除 " + droppedId + "（Ctrl+Z 可撤销）", function () {
+      // 删除后停留在原行：滚动位置由 applyDocPayload 保持，这里只补一句明确提示
+      setStatus("已删除 " + droppedId + " · 原文与表格位置保持不变（Ctrl+Z 可撤销）", "ok");
+    });
   }
 
   function mergeChunk(chunk, direction) {
