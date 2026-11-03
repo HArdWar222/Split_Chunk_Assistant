@@ -760,6 +760,7 @@
           if (!tr) continue;
           tr.classList.add("chunk-row");
           tr.dataset.chunk = String(idx);
+          tr.dataset.rowno = String(n); // 表内行号（law_num 里的「第X行」），用于新建切片的条号推算
           tr.style.setProperty("--row-hue", String(hue));
           tr.title = "切片 #" + (idx + 1) + " · " + chunk.id + " · " + (chunk.law_num || "") +
             " · 点击选中该切片";
@@ -1175,6 +1176,7 @@
         end: tbl.block.end,
         text: tblText,
         tableRows: [tbl.from, tbl.to],
+        tableRowsArr: tbl.rows,
         tableGap: tbl.allGap
       };
     }
@@ -1804,6 +1806,7 @@
               end: info.block.end,
               text: txt,
               tableRows: [info.from, info.to],
+              tableRowsArr: info.rows,
               tableGap: info.allGap
             });
           };
@@ -1846,7 +1849,9 @@
         "✚ 在表格块处新增切片",
         "第 " + hereBlock.start + "–" + hereBlock.end + " 行",
         (function (b, t) {
-          return function () { openAdd({ start: b.start, end: b.end, text: t }); };
+          return function () {
+            openAdd({ start: b.start, end: b.end, text: t, tableBlockRange: { start: b.start, end: b.end } });
+          };
         })(hereBlock, rawText)
       ));
       count++;
@@ -1972,6 +1977,133 @@
       if (nextAnchor) return nextAnchor;
     }
     return "";
+  }
+
+  // ---------- 表格新建切片的条号/表号推算（用相邻已切片交叉验证） ----------
+  // law_num 形如「第二部分 裁量细则 表1 第214-214行」→ 前缀 + 行区间；
+  // 只有表号没有行区间（如「附 录 C 表1」）时只返回前缀。
+  var TABLE_LAW_RE = /^(.*?表\s*[0-9A-Za-z.．]+)\s*第\s*(\d+)\s*[-–—~～]\s*(\d+)\s*行\s*$/;
+
+  function tableLawInfo(lawNum) {
+    var value = String(lawNum || "").trim();
+    if (!value || value === "（新增）") return null;
+    var m = TABLE_LAW_RE.exec(value);
+    if (m) {
+      return {
+        prefix: m[1].trim(),
+        rowStart: parseInt(m[2], 10),
+        rowEnd: parseInt(m[3], 10),
+        hasRows: true
+      };
+    }
+    if (value.indexOf("表") >= 0) return { prefix: value, rowStart: null, rowEnd: null, hasRows: false };
+    return null;
+  }
+
+  function lawInfoOfTr(tr) {
+    if (!tr || tr.dataset.chunk === undefined || !state.doc || !state.doc.chunks) return null;
+    var chunk = state.doc.chunks[parseInt(tr.dataset.chunk, 10)];
+    var info = tableLawInfo(chunk && chunk.law_num);
+    if (!info) return null;
+    return {
+      idx: tr.sectionRowIndex,
+      rowno: tr.dataset.rowno ? parseInt(tr.dataset.rowno, 10) : null,
+      prefix: info.prefix,
+      hasRows: info.hasRows
+    };
+  }
+
+  // 沿兄弟行找最近的「已被切片覆盖」的行，取它的行号与表号前缀
+  function nearestMappedRow(tr, dir) {
+    var cur = tr;
+    for (;;) {
+      cur = dir < 0 ? cur.previousElementSibling : cur.nextElementSibling;
+      if (!cur) return null;
+      if (cur.dataset.rowno === undefined) continue;
+      var info = lawInfoOfTr(cur);
+      if (info && isFinite(info.rowno)) return info;
+    }
+  }
+
+  function finishTableLaw(fromRow, toRow, above, below, confidence) {
+    var side = above || below;
+    if (!side || !isFinite(fromRow) || !isFinite(toRow) || fromRow < 1 || toRow < fromRow) return null;
+    if (above && below && above.prefix !== below.prefix) {
+      side = above; // 跨表时取上方一侧，置信度降级
+      confidence = "medium";
+    }
+    var value = side.hasRows
+      ? (side.prefix + " 第" + fromRow + "-" + toRow + "行")
+      : side.prefix;
+    return {
+      value: value,
+      confidence: confidence,
+      note: confidence === "high" ? "" : "按相邻切片推算，请确认"
+    };
+  }
+
+  // 用户选中的渲染表格行（tr 数组）→ { value, confidence, note }
+  // 规则：上下各找最近的已切表格行，校验表号前缀一致、偏移一致、推算行号正好落在两邻居之间。
+  function suggestTableLawNum(rows) {
+    if (!rows || !rows.length || !state.doc) return null;
+    var first = rows[0];
+    var parent = first.parentElement;
+    if (!parent || parent !== rows[rows.length - 1].parentElement) return null;
+    var above = nearestMappedRow(first, -1);
+    var below = nearestMappedRow(rows[rows.length - 1], 1);
+    var fromIdx = first.sectionRowIndex;
+    var toIdx = rows[rows.length - 1].sectionRowIndex;
+    // 选中行本身已被切片覆盖：直接用它们自己的行号
+    var selfRownos = [];
+    var firstSelf = null;
+    var lastSelf = null;
+    for (var s = 0; s < rows.length; s++) {
+      if (rows[s].dataset.rowno === undefined) continue;
+      var info = lawInfoOfTr(rows[s]);
+      if (!info) continue;
+      selfRownos.push(info.rowno);
+      if (!firstSelf) firstSelf = info;
+      lastSelf = info;
+    }
+    if (selfRownos.length) {
+      return finishTableLaw(Math.min.apply(null, selfRownos), Math.max.apply(null, selfRownos),
+        firstSelf, lastSelf, "high");
+    }
+    if (!above && !below) return null;
+    // 偏移 = 表格行下标 - 表内行号；上下两个邻居必须一致才可信
+    var offset = null;
+    if (above) offset = above.idx - above.rowno;
+    if (below) {
+      var offset2 = below.idx - below.rowno;
+      if (offset === null) offset = offset2;
+      else if (offset2 !== offset) {
+        // 偏移不一致：取离选中行更近的一侧，置信度降级
+        offset = (fromIdx - above.idx) <= (below.idx - toIdx) ? offset : offset2;
+      }
+    }
+    if (offset === null) return null;
+    var fromRow = fromIdx - offset;
+    var toRow = toIdx - offset;
+    // 交叉校验：推算结果必须严格落在两个邻居的行号之间
+    if (above && fromRow <= above.rowno) return null;
+    if (below && toRow >= below.rowno) return null;
+    var confidence = above && below && (above.idx - above.rowno) === (below.idx - below.rowno) &&
+      above.prefix === below.prefix ? "high" : "medium";
+    return finishTableLaw(fromRow, toRow, above, below, confidence);
+  }
+
+  // 整块新增（没有选中行）时：块内表格切片的表号前缀唯一才预填
+  function suggestTableLawNumForBlock(block) {
+    if (!block || !state.doc || !state.doc.chunks) return null;
+    var prefixes = [];
+    state.doc.chunks.forEach(function (chunk) {
+      if (!chunk.span || (chunk.chunk_kind !== "table" && chunk.chunk_kind !== "appendix")) return;
+      if (chunk.span[1] < block.start || chunk.span[0] > block.end) return;
+      var info = tableLawInfo(chunk.law_num);
+      if (info && prefixes.indexOf(info.prefix) < 0) prefixes.push(info.prefix);
+    });
+    if (prefixes.length !== 1) return null;
+    return { value: prefixes[0], confidence: "medium", note: "按该表格已有切片的表号推算，请确认" };
   }
 
   function fillKind(select, value) {
@@ -2293,7 +2425,20 @@
       el.addHint.hidden = false;
     }
     el.addLawNum.value = "";
+    // 来源是表格：用相邻已切片的条号/表号预填（可改）
+    var suggestion = null;
+    if (picked && picked.tableRowsArr && picked.tableRowsArr.length) {
+      suggestion = suggestTableLawNum(picked.tableRowsArr);
+    } else if (picked && picked.tableBlockRange) {
+      suggestion = suggestTableLawNumForBlock(picked.tableBlockRange);
+    }
     var inferredAddNum = inferAddLawNum();
+    if (suggestion) {
+      el.addLawNum.value = suggestion.value;
+      el.addHint.textContent += "；条号已预填「" + suggestion.value + "」" +
+        (suggestion.note ? "（" + suggestion.note + "）" : "") + "，可修改。";
+      el.addHint.hidden = false;
+    }
     el.addLawNum.placeholder = inferredAddNum
       ? ("留空则按前后块倒推：" + inferredAddNum)
       : "留空则为「（新增）」";
