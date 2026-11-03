@@ -230,9 +230,14 @@
     rows.forEach(function (cells) { width = Math.max(width, cells.length); });
     if (!width) width = 1;
     while (headers.length < width) headers.push("");
-    var headHtml = "<tr>" + headers.map(function (head) {
-      return "<th>" + escapeHtml(head) + "</th>";
-    }).join("") + "</tr>";
+    var headerRows = parseInt(table.header_rows, 10);
+    if (!isFinite(headerRows)) headerRows = 1;
+    var hasHeaders = headers.some(function (head) { return String(head).trim() !== ""; });
+    var headHtml = hasHeaders
+      ? "<thead><tr>" + headers.map(function (head) {
+        return "<th>" + escapeHtml(head) + "</th>";
+      }).join("") + "</tr></thead>"
+      : "";
     var noteFrom = (table.note_from === undefined || table.note_from === null)
       ? rows.length : parseInt(table.note_from, 10);
     if (!isFinite(noteFrom)) noteFrom = rows.length;
@@ -246,19 +251,61 @@
       }).join("") + "</tr>";
     }).join("");
     var meta = [];
+    if (table.meta_note) meta.push(escapeHtml(table.meta_note));
     if (table.table_label) meta.push(escapeHtml(table.table_label));
     if (table.table_title) meta.push(escapeHtml(table.table_title));
-    meta.push("表头 " + (parseInt(table.header_rows, 10) || 1) + " 行 · " + rows.length + " 行 × " + width + " 列");
+    meta.push((hasHeaders ? "表头 " + headerRows + " 行" : "无表头") + " · " + rows.length + " 行 × " + width + " 列");
     return '<div class="tblmeta">' + meta.join(" · ") + '</div>' +
-      '<div class="tblwrap"><table class="grid-table"><thead>' + headHtml + '</thead><tbody>' +
+      '<div class="tblwrap"><table class="grid-table">' + headHtml + '<tbody>' +
       bodyHtml + '</tbody></table></div>';
+  }
+
+  // 表格行的单元格与行在正文里以 \t / \n 分隔（后端 normalize_text 只去行尾空白，保留分隔符）。
+  // 手工新增的表格块没有 table_grid，这里用正文还原一个只读网格供右侧展示。
+  function inheritedTableHeaders(chunk, width) {
+    if (!state.doc || !state.tables || !chunk.span) return null;
+    var chunks = state.doc.chunks || [];
+    for (var i = 0; i < chunks.length; i++) {
+      var peer = chunks[i];
+      if (peer.id === chunk.id || !peer.span) continue;
+      if (peer.span[1] < chunk.span[0] || peer.span[0] > chunk.span[1]) continue;
+      var grid = state.tables[peer.id];
+      if (!grid || !grid.headers || !grid.headers.length) continue;
+      if (grid.headers.length !== width) continue;
+      var hasReal = grid.headers.some(function (head) { return String(head).trim() !== ""; });
+      if (hasReal) return grid.headers.slice();
+    }
+    return null;
+  }
+
+  function manualTableGrid(chunk) {
+    if (!chunk || !chunk.manual) return null;
+    if (chunk.chunk_kind !== "table" && chunk.chunk_kind !== "appendix") return null;
+    var raw = String(chunk.chunk === null || chunk.chunk === undefined ? "" : chunk.chunk);
+    var lines = raw.split("\n").filter(function (line) { return line.trim() !== ""; });
+    if (!lines.length) return null;
+    var rows = lines.map(function (line) {
+      return line.split("\t").map(function (cell) { return cell.trim(); });
+    });
+    var width = 0;
+    rows.forEach(function (cells) { width = Math.max(width, cells.length); });
+    if (width < 2) return null;
+    var headers = inheritedTableHeaders(chunk, width);
+    return {
+      headers: headers || [],
+      rows: rows,
+      width: width,
+      header_rows: headers ? 1 : 0,
+      note_from: rows.length,
+      meta_note: "手工表格 · " + (headers ? "表头继承自该表格" : "无表头（正文单元格拼接）")
+    };
   }
 
   // 切片正文 → 可视化 HTML：优先 table_grid；否则按管道表 / HTML 表解析；纯文字回退 pre
   function chunkBodyHtml(chunk) {
     var raw = String(chunk.chunk === null || chunk.chunk === undefined ? "" : chunk.chunk);
     var tables = state.tables || {};
-    var grid = chunk.manual ? null : tables[chunk.id];
+    var grid = chunk.manual ? manualTableGrid(chunk) : tables[chunk.id];
     if (grid) {
       return buildGridTableHtml(grid) +
         '<details class="chunk-raw"><summary>原始正文（送进检索的就是这段文字）</summary>' +
@@ -1138,10 +1185,11 @@
       if (range.intersectsNode(all[i])) picked.push({ tr: all[i], index: i + 1 });
     }
     if (!picked.length) return null;
+    // 保留空单元格（首/尾列可能为空）——用 \t 占位，手工块右栏才能按原列数还原网格
     var text = picked.map(function (item) {
       var cells = [];
       for (var c = 0; c < item.tr.cells.length; c++) cells.push(String(item.tr.cells[c].innerText || "").trim());
-      return cells.join("\t").replace(/^[\t ]+|[\t ]+$/g, "");
+      return cells.join("\t");
     }).join("\n");
     var allGap = picked.every(function (item) { return item.tr.dataset.chunk === undefined; });
     return {
@@ -2476,7 +2524,9 @@
     el.addLawNum.placeholder = inferredAddNum
       ? ("留空则按前后块倒推：" + inferredAddNum)
       : "留空则为「（新增）」";
-    fillKind(el.addKind, "paragraph");
+    // 来源是表格行 / 表格块：类型默认「表格」，其余默认「段落」（弹层里仍可改）
+    var fromTable = !!(picked && (picked.tableRowsArr || picked.tableBlockRange));
+    fillKind(el.addKind, fromTable ? "table" : "paragraph");
     el.addDialog.showModal();
   }
 

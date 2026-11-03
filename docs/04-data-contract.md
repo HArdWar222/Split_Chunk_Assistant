@@ -121,6 +121,8 @@
 | `table_title` | 表格 | 表题 |
 | `table_rows` | 表格 | 行数 |
 | `table_mode` | 表格 | `model`（整表）/ `pack`（打包） |
+
+**手工表格块的展示网格（P2 视图层，不入契约）**：从表格行/表格块新增的切片在正文里保留 `\t`（列）/`\n`（行）分隔，右栏据此还原网格表；表头从同一表格块已有切片的 `table_grid.headers` 继承（列数匹配才用），不写入正文、不写入 extras。因此手工块没有自己的 `table_grid`，`/api/tables` 也不会返回它；P3 落盘时如需让下游复用这份结构，再把网格写进该块的 extras。
 | `table_grid` | 表格 | `{headers, rows, header_rows, width}` 表格网格 |
 
 `table_grid` 只用于**视图层**画表：右栏表卡片按它渲染网格表（表头补齐、合并单元格抄平、`note_from` 之后的注释行黄底），原文侧则直接解析源 `.md` 的管道表 / HTML 表渲染；它不进入 15 字段、也不参与检索。人工改过正文的表格块（`manual=true`）前端不再使用旧 grid，避免显示过期内容。
