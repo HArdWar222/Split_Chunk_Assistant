@@ -415,6 +415,20 @@
     return null;
   }
 
+  // 表格里有 rowspan/colspan 时，鼠标下看到的「这一行」和事件 target 的 tr 可能不是同一行
+  // （一个跨 3 行的 td 属于第一行的 tr）。按坐标取真正落在光标下的那行，保证右键/点击
+  // 作用在用户看到的那一行。
+  function tableRowAtPoint(blockEl, x, y) {
+    if (!blockEl) return null;
+    var rows = blockEl._tableRows || blockEl.querySelectorAll("tbody tr");
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (!r.height) continue;
+      if (y >= r.top - 0.5 && y <= r.bottom + 0.5) return rows[i];
+    }
+    return null;
+  }
+
   function getJSON(url) {
     return fetch(url, { headers: { "Accept": "application/json" } }).then(function (resp) {
       return resp.json().then(function (body) {
@@ -898,6 +912,7 @@
           txt.innerHTML = tableHtml;
           row.className += " table-rendered";
           annotateTableRows(blockChunks, txt);
+          row._tableRows = txt.querySelectorAll("tbody tr");
         } else {
           txt.textContent = line.text || "";
         }
@@ -1626,8 +1641,9 @@
     });
 
     el.source.addEventListener("mouseover", function (ev) {
-      var trow = ev.target.closest("tr[data-chunk]");
-      if (trow) {
+      // 用坐标取「看得见的那一行」，避免 rowspan 单元格把鼠标事件挂到上一行
+      var trow = tableRowAtPoint(ev.target.closest(".line.table-block"), ev.clientX, ev.clientY);
+      if (trow && trow.dataset.chunk !== undefined) {
         var tidx = parseInt(trow.dataset.chunk, 10);
         var tchunk = state.doc && state.doc.chunks[tidx];
         if (tchunk) {
@@ -1647,7 +1663,7 @@
       highlightRelatedCards(line, end);
     });
     el.source.addEventListener("mouseout", function (ev) {
-      var trow = ev.target.closest("tr[data-chunk]");
+      var trow = tableRowAtPoint(ev.target.closest(".line.table-block"), ev.clientX, ev.clientY);
       if (trow) {
         if (ev.relatedTarget && trow.contains(ev.relatedTarget)) return;
         clearRelatedCards();
@@ -1671,22 +1687,22 @@
           return;
         }
       }
-      var gapTr = ev.target.closest(".line.table-block tbody tr");
-      if (gapTr && gapTr.dataset.chunk === undefined) {
+      var tblBlockEl = ev.target.closest(".line.table-block");
+      var tblRow = tableRowAtPoint(tblBlockEl, ev.clientX, ev.clientY);
+      if (tblRow && tblRow.dataset.chunk === undefined) {
         // 未切片的表格行：把这行内容设为选区，交给 applySelectionNow 统一标记与提示
         var gSel = window.getSelection ? window.getSelection() : null;
         if (gSel) {
           var gRange = document.createRange();
-          gRange.selectNodeContents(gapTr);
+          gRange.selectNodeContents(tblRow);
           gSel.removeAllRanges();
           gSel.addRange(gRange);
         }
         scheduleSelectionCheck();
         return;
       }
-      var trow = ev.target.closest("tr[data-chunk]");
-      if (trow) {
-        var tidx = parseInt(trow.dataset.chunk, 10);
+      if (tblRow) {
+        var tidx = parseInt(tblRow.dataset.chunk, 10);
         var tchunk = state.doc && state.doc.chunks[tidx];
         if (tchunk) {
           selectChunk(tchunk, { scrollSource: false, scrollCard: true });
@@ -1800,12 +1816,22 @@
     var line = row && row.dataset.line ? parseInt(row.dataset.line, 10) : 0;
     if (!line && picked) line = picked.start;
     if (!line && pos) line = pos.line;
-    var target = chunkAtLine(line);
+    // 表格行：按鼠标坐标取「看得见的那一行」（rowspan 会让事件 target 落在上一行的 tr 里），
+    // 再读行上记录的块下标。整张表在源文件里可能只占一行（山东 679 块都在第 588 行），
+    // chunkAtLine 只能取到列表里最靠前的块，不能用于表格行。
+    var tblBlockForMenu = ev.target && ev.target.closest ? ev.target.closest(".line.table-block") : null;
+    var rowTr = tableRowAtPoint(tblBlockForMenu, ev.clientX, ev.clientY);
+    var rowChunk = null;
+    if (rowTr && rowTr.dataset.chunk !== undefined) {
+      rowChunk = state.doc.chunks[parseInt(rowTr.dataset.chunk, 10)] || null;
+    }
+    var target = rowChunk || chunkAtLine(line);
     if (!target && picked) {
       var hits = chunksInLineRange(picked.start, picked.end);
       target = hits.length ? hits[0] : null;
     }
-    var plan = target ? splitPlanAt(target, pos || { line: line, offset: 0 }) : null;
+    // 表格行不是源码里的连续文字，没有「光标处拆分」可言
+    var plan = (target && !rowTr) ? splitPlanAt(target, pos || { line: line, offset: 0 }) : null;
 
     el.ctxMenu.innerHTML = "";
     var count = 0;
