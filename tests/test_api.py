@@ -223,6 +223,17 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(data["ok"])
 
+    def test_op_add_before_first_renumbers(self):
+        # 插到原文最前：新块拿 -0001，原 0001/0002 顺延成 0002/0003，diff 只报新增
+        status, data = self.apply_op(
+            {"op": "add", "text": "标题位置新增", "before_id": "测试法-0001", "span": [1, 2]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([c["id"] for c in data["chunks"]], ["测试法-0001", "测试法-0002", "测试法-0003"])
+        self.assertEqual(data["diff"]["added"], 1)
+        self.assertEqual(data["diff"]["removed"], 0)
+        self.assertEqual(data["diff"]["modified"], 0)
+
     def test_op_add_and_drop(self):
         status, data = self.apply_op({"op": "add", "text": "新增块正文", "chunk_kind": "paragraph"})
         self.assertEqual(status, 200)

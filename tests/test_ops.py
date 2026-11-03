@@ -302,11 +302,24 @@ class DropAddPatchTest(unittest.TestCase):
         # 继承模板的 law_type / issuer
         self.assertEqual(new["law_type"], "法律")
 
+        # 插到第一块后面：新块拿 -0002，原先的 0002/0003 顺延成 0003/0004
         out2 = apply_ops(base_chunks(), [{"op": "add", "text": "插在中间", "after_id": "测试法-0001"}], law_name=LAW)
         self.assertEqual(out2[1]["chunk"], "插在中间")
+        self.assertEqual(out2[1]["id"], "测试法-0002")
+        self.assertEqual(out2[2]["id"], "测试法-0003")
+        self.assertEqual(out2[3]["id"], "测试法-0004")
+
+    def test_add_renumbers_part_group(self):
+        part1 = make_chunk("测试法-0002-p1", "第二条 上半段。", law_num="第二条")
+        part1["part_index"], part1["part_total"] = 1, 2
+        part2 = make_chunk("测试法-0002-p2", "第二条 下半段。", law_num="第二条")
+        part2["part_index"], part2["part_total"] = 2, 2
+        chunks = [make_chunk("测试法-0001", "第一条 开始。"), part1, part2]
+        out = apply_ops(chunks, [{"op": "add", "text": "追加的正文"}], law_name=LAW)
+        self.assertEqual([c["id"] for c in out], ["测试法-0001", "测试法-0002-p1", "测试法-0002-p2", "测试法-0003"])
 
     def test_add_before_first(self):
-        # 原文顶部缺口新增：插到第一块之前，id 仍是 max_seq+1，顺序在列表最前
+        # 原文顶部缺口新增：插到第一块之前，新块拿 -0001，原有块整体顺延
         out = apply_ops(
             base_chunks(),
             [{"op": "add", "text": "标题位置新增", "before_id": "测试法-0001", "span": [1, 2]}],
@@ -314,9 +327,10 @@ class DropAddPatchTest(unittest.TestCase):
         )
         self.assertEqual(len(out), 4)
         self.assertEqual(out[0]["chunk"], "标题位置新增")
-        self.assertEqual(out[0]["id"], "测试法-0004")
+        self.assertEqual(out[0]["id"], "测试法-0001")
         self.assertEqual(out[0]["span"], [1, 2])
-        self.assertEqual(out[1]["id"], "测试法-0001")
+        self.assertEqual(out[1]["id"], "测试法-0002")
+        self.assertEqual(out[3]["id"], "测试法-0004")
 
     def test_add_errors(self):
         with self.assertRaises(OpError):
@@ -333,6 +347,7 @@ class DropAddPatchTest(unittest.TestCase):
         )
         new = out[2]
         self.assertEqual(new["chunk"], "从原文选中新增")
+        self.assertEqual(new["id"], "测试法-0003")
         self.assertEqual(new["span"], [7, 9])
         self.assertTrue(new["manual"])
         self.assertEqual(new["align"], "manual")
@@ -438,7 +453,8 @@ class ApplyAndDiffTest(unittest.TestCase):
         self.assertEqual(diff["added"], 1)
         self.assertEqual(diff["removed"], 1)
         self.assertEqual(diff["modified"], 1)
-        self.assertIn("测试法-0004", diff["added_ids"])
+        # 插入后按位置重排：新块拿到 0003，同时原附录块 0003 被删掉，id 字面相同但含义不同
+        self.assertIn("测试法-0003", diff["added_ids"])
         self.assertIn("测试法-0003", diff["removed_ids"])
         self.assertIn("测试法-0002", diff["modified_ids"])
 

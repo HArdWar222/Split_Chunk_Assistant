@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from .align import locate_text_span, norm_line
@@ -194,6 +195,42 @@ def next_id(chunks: list[dict], law_name: str, reserved=None) -> str:
         if candidate not in used:
             return candidate
         seq += 1
+
+
+def _renumber(chunks: list[dict], law_name: str) -> list[dict]:
+    """按当前顺序重排所有块的 id：首块 = ``{law_name}-0001``，多 part 共用 base 序号。
+
+    插入类编辑（add）之后调用，保证「id 序号 == 该块在原文中的位置」；
+    不改变块内容，只改 id（15 字段其余值不动，part 后缀也保留）。
+    """
+    out: list[dict] = []
+    seq = 0
+    part_base = None
+    prev_total = 0
+    prev_part_index = 0
+    for chunk in chunks:
+        item = _copy(chunk)
+        try:
+            total = int(item.get("part_total") or 1)
+            part_index = int(item.get("part_index") or 1)
+        except (TypeError, ValueError):
+            total, part_index = 1, 1
+        if total > 1:
+            if part_base is not None and prev_total > 1 and part_index == prev_part_index + 1:
+                base = part_base
+            else:
+                seq += 1
+                base = seq
+                part_base = base
+            item["id"] = f"{law_name}-{base:04d}-p{part_index}"
+        else:
+            seq += 1
+            item["id"] = f"{law_name}-{seq:04d}"
+            part_base = None
+        prev_total = total
+        prev_part_index = part_index
+        out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +483,9 @@ def _add(chunks: list[dict], op: dict, law_name: str, reserved=None, source_line
     _derive(new, text=text)
     _require_text(new, "新增")
 
-    return chunks[:insert_at] + [new] + chunks[insert_at:]
+    # 新增后按当前顺序重排 id：新块 id 反映它在原文中的位置（插入点之后的块序号顺延），
+    # 而不是永远拿队尾的 max_seq+1。
+    return _renumber(chunks[:insert_at] + [new] + chunks[insert_at:], law_name)
 
 
 def _patch(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
@@ -528,21 +567,93 @@ def apply_ops(
     return result
 
 
-def chunk_diff(baseline: list[dict], current: list[dict]) -> dict[str, Any]:
-    """对比基线：新增 / 修改 / 删除的数量与 id 列表。"""
-    base = {str(chunk.get("id")): chunk for chunk in baseline}
-    cur = {str(chunk.get("id")): chunk for chunk in current}
+def _diff_sig(chunk: dict) -> tuple[str, str, str]:
+    """用于 LCS 配对的「块内容签名」：正文 + 条号 + 类型。"""
+    return (
+        normalize_text(chunk.get("chunk")),
+        normalize_text(chunk.get("law_num")),
+        str(chunk.get("chunk_kind") or ""),
+    )
 
-    added = [cid for cid in cur if cid not in base]
-    removed = [cid for cid in base if cid not in cur]
-    modified = []
-    compare_fields = ("chunk", "law_num", "chunk_kind", "part_index", "part_total")
-    for cid, chunk in cur.items():
-        original = base.get(cid)
-        if original is None:
+
+def _diff_meta(chunk: dict) -> tuple[str, str]:
+    """次级配对键：条号 + 类型（正文被改写但条号没动时用）。"""
+    return (
+        normalize_text(chunk.get("law_num")),
+        str(chunk.get("chunk_kind") or ""),
+    )
+
+
+def chunk_diff(baseline: list[dict], current: list[dict]) -> dict[str, Any]:
+    """对比基线：新增 / 修改 / 删除的数量与 id 列表。
+
+    因为「新增切片」会按原文位置重排 id（插入点之后的块 id 全部顺延），
+    不能再用 id 集合直接比对（会把整段顺延误报成删+增）。这里按内容做
+    LCS 配对：内容相同的块视为未动，再按「条号+类型」和「正文相似度」
+    把剩余块配成修改，真正多出来的才算新增/删除。
+    """
+    base = list(baseline or [])
+    cur = list(current or [])
+    base_used = [False] * len(base)
+    cur_used = [False] * len(cur)
+    modified: list[str] = []
+
+    matcher = SequenceMatcher(
+        a=[_diff_sig(chunk) for chunk in base],
+        b=[_diff_sig(chunk) for chunk in cur],
+        autojunk=False,
+    )
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
             continue
-        if any(chunk.get(field) != original.get(field) for field in compare_fields):
-            modified.append(cid)
+        for offset in range(i2 - i1):
+            base_used[i1 + offset] = True
+            cur_used[j1 + offset] = True
+
+    # 第二阶段：正文改了但条号/类型没动 → 修改配对
+    meta_index: dict[tuple[str, str], list[int]] = {}
+    for index in range(len(base)):
+        if not base_used[index]:
+            meta_index.setdefault(_diff_meta(base[index]), []).append(index)
+
+    rest_cur: list[int] = []
+    for index in range(len(cur)):
+        if cur_used[index]:
+            continue
+        bucket = meta_index.get(_diff_meta(cur[index]))
+        if bucket:
+            base_index = bucket.pop(0)
+            base_used[base_index] = True
+            cur_used[index] = True
+            modified.append(str(cur[index].get("id")))
+        else:
+            rest_cur.append(index)
+
+    # 第三阶段：条号/类型也改了但正文大体没动 → 按相似度兜底（数量大时跳过，避免卡顿）
+    rest_base = [index for index in range(len(base)) if not base_used[index]]
+    if rest_base and rest_cur and len(rest_base) * len(rest_cur) <= 2500:
+        pairs: list[tuple[float, int, int]] = []
+        for base_index in rest_base:
+            left = normalize_text(base[base_index].get("chunk"))
+            if not left:
+                continue
+            for cur_index in rest_cur:
+                right = normalize_text(cur[cur_index].get("chunk"))
+                if not right:
+                    continue
+                ratio = SequenceMatcher(None, left, right, autojunk=False).ratio()
+                if ratio >= 0.5:
+                    pairs.append((ratio, base_index, cur_index))
+        pairs.sort(reverse=True)
+        for _, base_index, cur_index in pairs:
+            if base_used[base_index] or cur_used[cur_index]:
+                continue
+            base_used[base_index] = True
+            cur_used[cur_index] = True
+            modified.append(str(cur[cur_index].get("id")))
+
+    added = [str(cur[index].get("id")) for index in range(len(cur)) if not cur_used[index]]
+    removed = [str(base[index].get("id")) for index in range(len(base)) if not base_used[index]]
     return {
         "added": len(added),
         "modified": len(modified),

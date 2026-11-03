@@ -155,7 +155,8 @@ python -m unittest discover -s tests -t . -v   :: 123 个测试
 - 表格可视化实测（真实 Edge）：GB 14444-2025 原文管道表渲染 3 块、右栏 3 张 grid 表；2025版山东省自由裁量标准 原文 HTML 表（第 588 行，单行 23 万字符）渲染成功、右栏 684 张 grid 表 / 836 块；GB 50016-2018 原文 74 个表格块、右栏 64 张 grid 表；全部页面无运行时错误
 - P2 编辑：`POST /api/op`（split / merge / drop / add / patch）、`/api/undo`、`/api/redo`、`/api/reset`；
   `add` 可带 `span:[起始行,结束行]`（原文选区新增，1-based 闭区间）；插入位置用 `after_id`（之后）或 `before_id`（之前），都不传则追加到末尾；
-  拆分后块数 +1、diff 同步、新块 id = 该文件最大序号 +1（不回填已删编号）
+  新增后按原文位置重排 id（新块拿它在列表里的序号，插入点之后的块顺延；多 part 组继续共用 base 序号），diff 用内容 LCS 配对，插入只报 `+1 ~0 -0`；
+  拆分后块数 +1、diff 同步（拆分暂不重排 id，保持原有 id 语义）
 - 静态页 `/`、`/static/app.js`、`/static/style.css` 均可直出
 
 全语料对齐实测（2026-11-03，`align_chunks`）：

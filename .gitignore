@@ -39,4 +39,5 @@ _shot_*.mjs
 _shots/
 _scan_*.py
 _probe*.py
+_verify*.py
 _msg*.txt
