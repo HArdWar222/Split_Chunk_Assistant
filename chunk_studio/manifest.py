@@ -357,9 +357,15 @@ class DirManifest:
                             continue
                         chunk_id = str(row.get("id") or "")
                         if chunk_id:
-                            extras[chunk_id] = {
-                                k: v for k, v in row.items() if k != "id"
-                            }
+                            nested = row.get("extras")
+                            if isinstance(nested, dict):
+                                # FAC-RAG 全局侧车写法：{"id": …, "extras": {…}}
+                                extras[chunk_id] = dict(nested)
+                            else:
+                                # 切块包写法：字段平铺在同一行
+                                extras[chunk_id] = {
+                                    k: v for k, v in row.items() if k != "id"
+                                }
             self._extras_cache[path] = extras
         return self._extras_cache[path]
 

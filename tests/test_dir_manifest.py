@@ -70,6 +70,17 @@ class DirManifestTest(unittest.TestCase):
         self.assertTrue(path.is_file())
         self.assertEqual(path.name, "测试包法规.chunks.jsonl")
 
+    def test_nested_extras_format(self) -> None:
+        """FAC-RAG 风格的 {"id","extras"} 嵌套侧车也能解析（不只是平铺）。"""
+        base = temp_dir()
+        try:
+            root = make_data_dir(base, extras_style="nested")
+            extras = DirManifest(root).extras_for("data/测试包法规")
+            self.assertEqual(extras["测试包法规-0001"]["clause"], "第一条")
+            self.assertNotIn("extras", extras["测试包法规-0001"])
+        finally:
+            remove(base)
+
 
 class DirBridgeTest(unittest.TestCase):
     def setUp(self) -> None:

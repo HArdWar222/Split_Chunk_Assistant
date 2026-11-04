@@ -74,6 +74,49 @@ class AppTest(unittest.TestCase):
         self.assertFalse(data["ok"])
         self.assertIn("error", data)
 
+    def test_reload_rescans_local_dirs(self):
+        """POST /api/reload 重新扫描本地两目录，新放的切块包立刻可见。"""
+        from tests.fixtures import make_data_dir
+
+        data_root = make_data_dir(self.base)
+        cfg = Config(
+            fac_root=str(self.base),
+            chunks_dir=str(self.base / "missing"),
+            data_root=str(data_root),
+            port=8790,
+        )
+        app = App(Studio(cfg=cfg, config_path=self.config_path))
+        status, _, raw = app.handle("GET", "/api/files")
+        data = json.loads(raw.decode("utf-8"))
+        self.assertEqual(data["mode"], "dirs")
+        self.assertEqual(data["totals"]["n_files"], 1)
+
+        name = "补充法规"
+        (data_root / "source" / (name + ".md")).write_text(
+            "# 补充法规\n\n第一条 补充。\n", encoding="utf-8"
+        )
+        chunk = {
+            "id": name + "-0001",
+            "chunk": "第一条 补充。",
+            "law_name": name,
+            "law_num": "第一条",
+            "chunk_kind": "clause",
+            "part_index": 1,
+            "part_total": 1,
+        }
+        (data_root / "chunks" / (name + ".chunks.jsonl")).write_text(
+            json.dumps(chunk, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+        status, _, raw = app.handle("POST", "/api/reload", b"{}")
+        body = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["message"], "已重新扫描数据目录")
+        self.assertEqual(body["files"]["totals"]["n_files"], 2)
+        keys = [f["key"] for g in body["files"]["groups"] for f in g["files"]]
+        self.assertIn("data/补充法规", keys)
+
     # -- /api/config ------------------------------------------------
     def test_get_config(self):
         status, data = self.body(self.get("/api/config"))

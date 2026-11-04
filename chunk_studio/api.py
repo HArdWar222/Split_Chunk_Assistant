@@ -84,6 +84,21 @@ class App:
             payload = self.studio.files_payload()
             return _json(payload, 200 if payload.get("ok") else 503)
 
+        if method == "POST" and path == "/api/reload":
+            # 重新扫描数据目录（新增/删除本地切块后不必重启服务）
+            self.studio.reload()
+            payload = self.studio.files_payload()
+            ok = bool(payload.get("ok"))
+            return _json(
+                {
+                    "ok": ok,
+                    "files": payload,
+                    "message": "已重新扫描数据目录",
+                    "error": None if ok else (payload.get("error") or "切块产物不可用"),
+                },
+                200 if ok else 503,
+            )
+
         if method == "GET" and path == "/api/config":
             return _json(self.studio.config_payload())
 

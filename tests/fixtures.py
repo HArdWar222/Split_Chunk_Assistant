@@ -169,11 +169,12 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def make_data_dir(base: Path) -> Path:
+def make_data_dir(base: Path, extras_style: str = "flat") -> Path:
     """创建本地「两目录」数据源：``<base>/data/source`` + ``<base>/data/chunks``。
 
     刻意模拟真实切块包：chunk 只有 14 字段（**没有 token_len**），
-    part_index/part_total 是字符串，extras 是字段平铺的 jsonl。
+    part_index/part_total 是字符串；extras_style 控制侧车格式：
+    ``flat``（字段平铺）或 ``nested``（``{"id": …, "extras": {…}}``，FAC-RAG 写法）。
     """
     data_root = base / "data"
     source_dir = data_root / "source"
@@ -222,10 +223,20 @@ def make_data_dir(base: Path) -> Path:
         },
     ]
     _write_jsonl(chunks_dir / (name + ".chunks.jsonl"), chunks)
-    extras = [
+    flat_extras = [
         {"id": name + "-0001", "table_label": "", "region": "body", "clause": "第一条"},
         {"id": name + "-0002", "table_label": "", "region": "body", "clause": "第二条"},
     ]
+    if extras_style == "nested":
+        extras = [
+            {
+                "id": row["id"],
+                "extras": {k: v for k, v in row.items() if k != "id"},
+            }
+            for row in flat_extras
+        ]
+    else:
+        extras = flat_extras
     _write_jsonl(chunks_dir / (name + ".extras.jsonl"), extras)
     return data_root
 

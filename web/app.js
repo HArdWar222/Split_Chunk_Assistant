@@ -2984,9 +2984,32 @@
       renderTree();
     });
     el.btnRefresh.addEventListener("click", function () {
+      var btn = el.btnRefresh;
+      if (btn.disabled) return;
+      var label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "重新扫描…";
+      var key = state.docKey || keyFromHash();
       state.doc = null;
       state.docKey = null;
-      loadFiles();
+      postJSON("/api/reload", {}).then(function (res) {
+        state.data = res.files;
+        state.config = res.files.config || state.config;
+        renderStats(res.files);
+        renderTree();
+        if (key) {
+          selectByKey(key);
+        } else {
+          setStatus("已重新扫描 · " + res.files.totals.n_files + " 个文件 / " + res.files.totals.n_chunks + " 块", "ok");
+        }
+        showToast("已重新扫描数据目录：" + res.files.totals.n_files + " 个文件 · " + res.files.totals.n_chunks + " 块", "ok");
+      }).catch(function (err) {
+        showToast("重新扫描失败：" + err.message, "err");
+        loadFiles();
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = label;
+      });
     });
     el.btnSettings.addEventListener("click", openSettings);
     el.btnCancel.addEventListener("click", function () { el.dialog.close(); });

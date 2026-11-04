@@ -89,6 +89,8 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 | dirs（本地两目录） | `DirManifest` | `<data_root>/source/**.md` + `<data_root>/chunks/<名>.chunks.jsonl`（+ 同名 `.extras.jsonl` 可选） | 现算：块数、kinds、覆盖率；gate/warnings 显示「—」 |
 
 - 子目录即分组（`data/<子目录>`），源与切片按「同名 + 同相对路径」配对；源缺失只记 warning，仍可打开看切片。
+- 扫描时机：服务启动、保存设置、以及 `POST /api/reload`（页面「刷新」按钮）时重扫；页面普通刷新不会重扫，避免大目录频繁 IO。
+- `<名>.extras.jsonl` 支持两种行格式：字段平铺（`{"id", …, "table_grid": {…}}`）或嵌套 `{"id": …, "extras": {…}}`（FAC-RAG 风格），`DirManifest.extras_for()` 统一成 `{id: extras}`。
 - `FacBridge` 接受 `Manifest` 或 `DirManifest` 实例；本地包里缺 `token_len` 时用 `len(chunk)` 补、`part_index/part_total` 转 int。
 - `Studio.bridge_for(key)` 先查 manifest 源、再查本地源；`/api/files` 返回 `mode`（both / manifest / dirs）与 `sources`（每个源的块数、目录、generated_at），`/api/config` 额外回 `data_root`、`data_ok`、`data_error`。
 - 设置面板可留空其中一种：两者至少一种可用即可启动。本地数据目录默认 `data/`，已加入 `.gitignore`（数据不进仓库）。
