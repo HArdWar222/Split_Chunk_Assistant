@@ -203,6 +203,7 @@ body {
 .badge-warn { color: var(--warn); background: #fdf1e3; }
 .badge-err { color: var(--err); background: #fdeaea; }
 .badge-local { color: #0f766e; background: #e8f7f3; border-color: #b7e4d8; }
+.badge-tblhint { color: #92400e; background: #fef3c7; border-color: #fcd34d; }
 
 .empty-hint { color: var(--muted); font-size: 13px; padding: 18px 8px; text-align: center; }
 

@@ -988,6 +988,27 @@
           mapped++;
         }
       });
+      // 没有「第X-Y行」的块（整表打包、或切块器把表格行并成了 paragraph）：
+      // 它覆盖这个表格块时，把还没被别的切片认领的行整表算给它，
+      // 否则点这种卡片时原文一行都不会高亮（用户报「表格未高亮」）。
+      // 倒序处理，让「注X」这类排在后面的小块先认领剩余的尾行。
+      blockChunks.slice().reverse().forEach(function (idx) {
+        if (bodyRows.every(function (tr) { return tr.dataset.chunk !== undefined; })) return;
+        var chunk = doc.chunks[idx];
+        if (tableRowRange(chunk)) return;
+        var hue = rowHue(idx);
+        for (var n = 1; n <= bodyRows.length; n++) {
+          var tr = bodyRows[n - 1];
+          if (!tr || tr.dataset.chunk !== undefined) continue;
+          tr.classList.add("chunk-row");
+          tr.dataset.chunk = String(idx);
+          tr.style.setProperty("--row-hue", String(hue));
+          tr.title = "切片 #" + (idx + 1) + " · " + chunk.id + " · " + (chunk.law_num || "") +
+            " · 整表覆盖（该块没有行区间）";
+          if (!state.tableRows[chunk.id]) state.tableRows[chunk.id] = [];
+          state.tableRows[chunk.id].push(tr);
+        }
+      });
       // 渲染出来的表格行里，没有被任何表格切片覆盖的行 → 标成「未切片」行，
       // 让用户一眼看出哪里是缺口，并且可以拖选后右键新增切片。
       bodyRows.forEach(function (tr) {
@@ -1127,6 +1148,17 @@
       var badges = [];
       badges.push("<span class='badge badge-kind kind-" + escapeHtml(chunk.chunk_kind) + "'>" +
         escapeHtml(KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind) + "</span>");
+      // 切块器偶尔把「整表压成的段落块」标成 paragraph：卡片上给个提示（不改数据，只解释）
+      if (chunk.chunk_kind !== "table" && chunk.chunk_kind !== "appendix" && chunk.span) {
+        var spanLine = doc.lines[chunk.span[0] - 1];
+        var spanText = spanLine && typeof spanLine.text === "string" ? spanLine.text.replace(/^\s+/, "") : "";
+        if (spanText.slice(0, 6).toLowerCase() === "<table") {
+          badges.push("<span class='badge badge-tblhint' title='这张表被切块器归成了「" +
+            escapeHtml(KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind) +
+            "」块（上游分类）；工具按原文整表高亮。要改分类可点「✎ 改」把类型改成表格'>表格·切块器标为" +
+            escapeHtml(KIND_LABEL[chunk.chunk_kind] || chunk.chunk_kind) + "</span>");
+        }
+      }
       if (chunk.law_num) badges.push("<span class='badge badge-num'>" + escapeHtml(chunk.law_num) + "</span>");
       // 合并/大块：从原文行倒推这块实际覆盖的条号范围（视图层提示，不改 15 字段契约）
       var cover = coveredLawNums(chunk);
