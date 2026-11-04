@@ -190,30 +190,21 @@ class Config:
     def validate(self) -> list[str]:
         """返回错误列表（空列表=通过）。只有硬错误，没有警告。
 
-        ``chunks_dir``（FAC-RAG manifest 源）与 ``data_root``（本地两目录源）
-        至少要有一个可用；``data_root`` 留空表示不启用本地源。
+        唯一数据源是本地「两目录」数据根 ``data_root``（下含 ``source/`` 与
+        ``chunks/``）；``fac_root``/``chunks_dir``/``source_roots`` 只为兼容旧
+        配置文件保留，不再参与校验。
         """
         errors: list[str] = []
-        chunks = Path(self.chunks_dir)
-        data_ok = self.data_available()
-        if not self.manifest_available() and not data_ok:
-            if not chunks.is_dir():
-                errors.append(f"切块产物目录不存在：{chunks}")
-            elif not (chunks / MANIFEST_NAME).is_file():
-                errors.append(f"目录里没有 {MANIFEST_NAME}：{chunks}")
-        if self.data_root:
+        if not self.data_root:
+            errors.append("未配置本地数据目录 data_root（下需含 source/ 与 chunks/）")
+        else:
             root = Path(self.data_root)
             if not root.is_dir():
                 errors.append(f"本地数据目录不存在：{root}")
-            elif not data_ok:
+            elif not self.data_available():
                 errors.append(
                     f"本地数据目录不完整（需含 {DIR_SOURCE}/ 与 {DIR_CHUNKS}/）：{root}"
                 )
-        for group, root in sorted(self.source_roots.items()):
-            if not root:
-                continue
-            if not Path(root).is_dir():
-                errors.append(f"源目录不存在（{group}）：{root}")
         if not (0 < self.port < 65536):
             errors.append(f"端口超出范围 1–65535：{self.port}")
         if self.max_chars < 200:

@@ -85,14 +85,11 @@
     btnAddOk: document.getElementById("btn-add-ok"),
     dialog: document.getElementById("settings-dialog"),
     form: document.getElementById("settings-form"),
-    chunksDir: document.getElementById("cfg-chunks-dir"),
-    facRoot: document.getElementById("cfg-fac-root"),
     dataRoot: document.getElementById("cfg-data-root"),
     port: document.getElementById("cfg-port"),
     autoPart: document.getElementById("cfg-auto-part"),
     maxChars: document.getElementById("cfg-max-chars"),
     minPartChars: document.getElementById("cfg-min-part-chars"),
-    sourceRoots: document.getElementById("cfg-source-roots"),
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
     toast: document.getElementById("toast"),
@@ -3154,66 +3151,23 @@
     var cfg = (state.data && state.data.ok !== false) ? (state.data.config || state.config) : (state.config || {});
     if (!cfg) cfg = {};
     if (cfg.ok === false) cfg = cfg.config || cfg;
-    el.chunksDir.value = cfg.chunks_dir || "";
-    el.facRoot.value = cfg.fac_root || "";
     el.dataRoot.value = cfg.data_root || "";
     el.port.value = cfg.port || 8790;
     if (el.autoPart) el.autoPart.checked = !!cfg.auto_part;
     if (el.maxChars) el.maxChars.value = cfg.max_chars || 800;
     if (el.minPartChars) el.minPartChars.value = cfg.min_part_chars || 200;
-    renderSourceRoots(cfg);
     el.cfgErrors.hidden = true;
     el.cfgErrors.textContent = "";
     el.dialog.showModal();
   }
 
-  function renderSourceRoots(cfg) {
-    el.sourceRoots.innerHTML = "";
-    var defaults = cfg.default_source_roots || {};
-    var configured = cfg.source_roots || {};
-    var names = Object.keys(configured);
-    Object.keys(defaults).forEach(function (name) {
-      if (names.indexOf(name) < 0) names.push(name);
-    });
-    (cfg.groups || []).forEach(function (name) {
-      if (names.indexOf(name) < 0) names.push(name);
-    });
-    if (!names.length) {
-      el.sourceRoots.innerHTML = "<div class='hint'>（暂无分组信息，先保存产物目录）</div>";
-      return;
-    }
-    names.forEach(function (name) {
-      var row = document.createElement("div");
-      row.className = "source-row";
-      var label = document.createElement("label");
-      label.textContent = name;
-      var input = document.createElement("input");
-      input.type = "text";
-      input.dataset.group = name;
-      input.placeholder = "留空自动推导（默认：" + (defaults[name] || "未知") + "）";
-      input.value = configured[name] || "";
-      input.spellcheck = false;
-      row.appendChild(label);
-      row.appendChild(input);
-      el.sourceRoots.appendChild(row);
-    });
-  }
-
   function collectSettings() {
-    var sourceRoots = {};
-    Array.prototype.forEach.call(el.sourceRoots.querySelectorAll("input[data-group]"), function (input) {
-      var v = input.value.trim();
-      if (v) sourceRoots[input.dataset.group] = v;
-    });
     return {
-      chunks_dir: el.chunksDir.value.trim(),
-      fac_root: el.facRoot.value.trim(),
       data_root: el.dataRoot.value.trim(),
       port: parseInt(el.port.value, 10) || 8790,
       auto_part: !!(el.autoPart && el.autoPart.checked),
       max_chars: parseInt(el.maxChars && el.maxChars.value, 10) || 800,
-      min_part_chars: parseInt(el.minPartChars && el.minPartChars.value, 10) || 200,
-      source_roots: sourceRoots
+      min_part_chars: parseInt(el.minPartChars && el.minPartChars.value, 10) || 200
     };
   }
 

@@ -8,20 +8,16 @@ from urllib.parse import quote
 from chunk_studio.api import App
 from chunk_studio.config import Config
 from chunk_studio.studio import Studio
-from tests.fixtures import make_chunks_dir, remove, temp_dir
+from tests.fixtures import make_two_file_data_dir, remove, temp_dir
 
 
 class AppTest(unittest.TestCase):
     def setUp(self):
         self._tmp = temp_dir()
         self.base = self._tmp
-        self.chunks_dir = make_chunks_dir(self.base)
+        self.data_root = make_two_file_data_dir(self.base)
         self.config_path = self.base / "config.json"
-        cfg = Config(
-            fac_root=str(self.base),
-            chunks_dir=str(self.chunks_dir),
-            port=8790,
-        )
+        cfg = Config(data_root=str(self.data_root), port=8790)
         self.studio = Studio(cfg=cfg, config_path=self.config_path)
         self.app = App(self.studio)
 
@@ -56,16 +52,12 @@ class AppTest(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["totals"]["n_files"], 2)
         self.assertEqual(data["totals"]["n_chunks"], 3)
-        self.assertEqual([g["name"] for g in data["groups"]], ["national_laws", "GB_laws"])
+        self.assertEqual([g["name"] for g in data["groups"]], ["data"])
         self.assertIn("config", data)
-        self.assertTrue(data["config"]["manifest_ok"])
+        self.assertTrue(data["config"]["data_ok"])
 
     def test_files_unavailable(self):
-        cfg = Config(
-            fac_root=str(self.base),
-            chunks_dir=str(self.base / "missing"),
-            port=8790,
-        )
+        cfg = Config(data_root=str(self.base / "missing"), port=8790)
         studio = Studio(cfg=cfg, config_path=self.config_path)
         app = App(studio)
         status, _, raw = app.handle("GET", "/api/files")
@@ -122,16 +114,16 @@ class AppTest(unittest.TestCase):
         status, data = self.body(self.get("/api/config"))
         self.assertEqual(status, 200)
         self.assertEqual(data["port"], 8790)
-        self.assertEqual(data["chunks_dir"], str(self.chunks_dir))
-        self.assertTrue(data["manifest_ok"])
+        self.assertEqual(data["data_root"], str(self.data_root))
+        self.assertTrue(data["data_ok"])
         self.assertEqual(data["errors"], [])
-        self.assertIn("national_laws", data["default_source_roots"])
+        self.assertTrue(data["data_source_dir"].endswith("source"))
 
     def test_post_config_ok(self):
         status, data = self.body(
             self.post(
                 "/api/config",
-                {"source_roots": {"national_laws": str(self.base / "national_laws")}},
+                {"port": 8791},
             )
         )
         self.assertEqual(status, 200)
@@ -139,7 +131,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(data["message"], "配置已保存")
         # 落盘生效
         saved = Config.load(self.config_path)
-        self.assertEqual(saved.source_roots["national_laws"], str(self.base / "national_laws"))
+        self.assertEqual(saved.port, 8791)
         # 产物依然可用
         status, files = self.body(self.get("/api/files"))
         self.assertEqual(status, 200)
@@ -164,10 +156,10 @@ class AppTest(unittest.TestCase):
         return self.body(self.get("/api/doc?key=" + quote(key, safe="")))
 
     def test_doc_ok(self):
-        status, data = self.doc("national_laws/测试法")
+        status, data = self.doc("data/测试法")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["key"], "national_laws/测试法")
+        self.assertEqual(data["key"], "data/测试法")
         self.assertEqual(data["law_name"], "测试法")
         self.assertEqual(len(data["lines"]), 5)
         self.assertEqual(len(data["chunks"]), 2)
@@ -189,26 +181,26 @@ class AppTest(unittest.TestCase):
         self.assertFalse(data["ok"])
 
     def test_doc_unknown_key(self):
-        status, data = self.doc("national_laws/不存在的法规")
+        status, data = self.doc("data/不存在的法规")
         self.assertEqual(status, 404)
         self.assertFalse(data["ok"])
 
     def test_doc_source_missing(self):
         # 源 md 被删 → 404「源文件缺失」
-        (self.base / "national_laws" / "测试法.md").unlink()
-        status, data = self.doc("national_laws/测试法")
+        (self.data_root / "source" / "测试法.md").unlink()
+        status, data = self.doc("data/测试法")
         self.assertEqual(status, 404)
         self.assertFalse(data["ok"])
         self.assertIn("源文件", data["error"])
 
     def test_doc_cached(self):
-        self.doc("national_laws/测试法")
-        status, data = self.doc("national_laws/测试法")
+        self.doc("data/测试法")
+        status, data = self.doc("data/测试法")
         self.assertEqual(status, 200)
         self.assertEqual(len(data["chunks"]), 2)
 
     # -- P2 编辑接口 -------------------------------------------------
-    KEY = "national_laws/测试法"
+    KEY = "data/测试法"
 
     def apply_op(self, op):
         return self.body(self.post("/api/op", {"key": self.KEY, "op": op}))
@@ -339,7 +331,7 @@ class AppTest(unittest.TestCase):
         return self.body(self.get("/api/tables?key=" + quote(key, safe="")))
 
     def test_tables_empty(self):
-        status, data = self.tables("national_laws/测试法")
+        status, data = self.tables("data/测试法")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         self.assertEqual(data["n_tables"], 0)
@@ -347,25 +339,25 @@ class AppTest(unittest.TestCase):
 
     def test_tables_with_grid(self):
         # 给 测试法-0001 补一个 table_grid（模拟表块），/api/tables 应返回结构化网格
-        jsonl = self.chunks_dir / "national_laws__测试法.jsonl"
+        jsonl = self.data_root / "chunks" / "测试法.chunks.jsonl"
         rows = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
         rows[0]["chunk_kind"] = "table"
         jsonl.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
-        extras_path = self.chunks_dir / "_extras.jsonl"
+        extras_path = self.data_root / "chunks" / "测试法.extras.jsonl"
         extras = [json.loads(line) for line in extras_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         entry = next((item for item in extras if item["id"] == rows[0]["id"]), None)
         if entry is None:
-            entry = {"id": rows[0]["id"], "extras": {}}
+            entry = {"id": rows[0]["id"]}
             extras.append(entry)
-        entry["extras"] = {
+        entry.update({
             "table_label": "表1",
             "table_grid": {"headers": ["序号", "名称"], "rows": [["1", "甲"], ["2", "乙"]], "header_rows": 1},
-        }
+        })
         extras_path.write_text(
             "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in extras), encoding="utf-8")
         self.studio.reload()
-        status, data = self.tables("national_laws/测试法")
+        status, data = self.tables("data/测试法")
         self.assertEqual(status, 200)
         self.assertEqual(data["n_tables"], 1)
         grid = data["tables"][rows[0]["id"]]
@@ -380,7 +372,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 400)
 
     def test_tables_unknown_key(self):
-        status, _ = self.body(self.get("/api/tables?key=" + quote("national_laws/不存在", safe="")))
+        status, _ = self.body(self.get("/api/tables?key=" + quote("data/不存在", safe="")))
         self.assertEqual(status, 404)
 
     def test_index(self):

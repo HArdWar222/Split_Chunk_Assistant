@@ -9,7 +9,7 @@ from chunk_studio.config import (
     Config,
     ConfigError,
 )
-from tests.fixtures import make_chunks_dir, make_data_dir, workspace_tmp
+from tests.fixtures import make_data_dir, workspace_tmp
 
 
 class ConfigDefaultsTest(unittest.TestCase):
@@ -55,40 +55,39 @@ class ConfigMergedTest(unittest.TestCase):
 
 
 class ConfigValidateTest(unittest.TestCase):
-    def test_missing_chunks_dir(self):
-        with workspace_tmp() as tmp:
-            cfg = Config(fac_root=tmp, chunks_dir=str(Path(tmp) / "nope"))
-            errors = cfg.validate()
-            self.assertTrue(any("不存在" in e for e in errors), errors)
+    def test_missing_data_root(self):
+        errors = Config().validate()
+        self.assertTrue(any("未配置本地数据目录" in e for e in errors), errors)
 
-    def test_missing_manifest(self):
+    def test_missing_data_dir(self):
         with workspace_tmp() as tmp:
-            empty = Path(tmp) / "chunks"
-            empty.mkdir()
-            cfg = Config(fac_root=tmp, chunks_dir=str(empty))
-            self.assertTrue(any("_manifest.json" in e for e in cfg.validate()))
+            cfg = Config(data_root=str(Path(tmp) / "missing"))
+            self.assertTrue(any("本地数据目录不存在" in e for e in cfg.validate()))
 
-    def test_ok_with_fixture(self):
+    def test_incomplete_data_dir(self):
         with workspace_tmp() as tmp:
-            chunks = make_chunks_dir(Path(tmp))
-            cfg = Config(fac_root=tmp, chunks_dir=str(chunks), port=8790)
+            data = Path(tmp) / "data"
+            (data / "source").mkdir(parents=True)
+            cfg = Config(data_root=str(data))
+            self.assertTrue(any("不完整" in e for e in cfg.validate()))
+
+    def test_ok_with_data_fixture(self):
+        with workspace_tmp() as tmp:
+            data = make_data_dir(Path(tmp))
+            cfg = Config(data_root=str(data), port=8790)
             self.assertEqual(cfg.validate(), [])
             cfg.require_valid()
-
-    def test_missing_source_root(self):
-        with workspace_tmp() as tmp:
-            cfg = Config(fac_root=tmp, chunks_dir=str(Path(tmp) / "x"), source_roots={"g": str(Path(tmp) / "nope")})
-            self.assertTrue(any("源目录" in e for e in cfg.validate()))
 
     def test_save_and_load(self):
         with workspace_tmp() as tmp:
             path = Path(tmp) / "config.json"
-            cfg = Config(fac_root=tmp, chunks_dir=str(Path(tmp) / "chunks"), port=8899)
+            data = make_data_dir(Path(tmp))
+            cfg = Config(data_root=str(data), port=8899)
             saved = cfg.save(path)
             self.assertEqual(saved, path)
             loaded = Config.load(path)
             self.assertEqual(loaded.port, 8899)
-            self.assertEqual(loaded.chunks_dir, str(Path(tmp) / "chunks"))
+            self.assertEqual(loaded.data_root, str(data))
 
 
 class ConfigDataRootTest(unittest.TestCase):

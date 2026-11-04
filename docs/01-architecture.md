@@ -79,21 +79,21 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 
 后端约 1,600 行，前端约 800 行，合计约 2,400 行，**无任何第三方依赖**。
 
-### 2.1 数据源：清单模式与本地两目录模式（2026-11-04）
+### 2.1 数据源：本地两目录（唯一数据源，2026-11-04）
 
-`manifest.py` 提供两个同签名实现，`studio.py` 可同时挂两个桥：
+`DirManifest` 是唯一的数据源实现（`Manifest` 类保留作历史/工具兼容，`Studio` 不再加载）：
 
-| 模式 | 类 | 目录约定 | 元数据 |
+| 数据源 | 类 | 目录约定 | 元数据 |
 |---|---|---|---|
-| manifest（FAC-RAG 产物） | `Manifest` | `chunks_dir/_manifest.json` + `<group>__<名>.jsonl` + 全局 `_extras.jsonl` | 完整：gate、warnings、sha256、char_coverage |
 | dirs（本地两目录） | `DirManifest` | `<data_root>/source/**.md` + `<data_root>/chunks/<名>.chunks.jsonl`（+ 同名 `.extras.jsonl` 可选） | 现算：块数、kinds、覆盖率；gate/warnings 显示「—」 |
 
 - 子目录即分组（`data/<子目录>`），源与切片按「同名 + 同相对路径」配对；源缺失只记 warning，仍可打开看切片。
 - 扫描时机：服务启动、保存设置、以及 `POST /api/reload`（页面「刷新」按钮）时重扫；页面普通刷新不会重扫，避免大目录频繁 IO。
 - `<名>.extras.jsonl` 支持两种行格式：字段平铺（`{"id", …, "table_grid": {…}}`）或嵌套 `{"id": …, "extras": {…}}`（FAC-RAG 风格），`DirManifest.extras_for()` 统一成 `{id: extras}`。
-- `FacBridge` 接受 `Manifest` 或 `DirManifest` 实例；本地包里缺 `token_len` 时用 `len(chunk)` 补、`part_index/part_total` 转 int。
-- `Studio.bridge_for(key)` 先查 manifest 源、再查本地源；`/api/files` 返回 `mode`（both / manifest / dirs）与 `sources`（每个源的块数、目录、generated_at），`/api/config` 额外回 `data_root`、`data_ok`、`data_error`。
-- 设置面板可留空其中一种：两者至少一种可用即可启动。本地数据目录默认 `data/`，已加入 `.gitignore`（数据不进仓库）。
+- `FacBridge` 接受 `DirManifest` 实例；本地包里缺 `token_len` 时用 `len(chunk)` 补、`part_index/part_total` 转 int。
+- `Studio` 只建一个桥（`data_root`），`bridge_for(key)` 在该桥上查 key；`/api/files` 返回 `mode=dirs`、单组 `data`；`/api/config` 返回 `data_root`、`data_ok`、`data_error`。
+- `data_root` 必填（默认 `data/`，已加入 `.gitignore`，数据不进仓库）；旧配置里的 `fac_root`/`chunks_dir`/`source_roots` 只为兼容保留，已不参与读取与校验。
+
 
 ---
 
@@ -256,7 +256,7 @@ def align_chunks(chunks, work_lines, extras, *, source_line_map=None) -> dict[st
 
 ## 9. 覆盖层与基线
 
-- **基线**：`FAC-RAG/data/chunks_v2/*.jsonl`（97 个文件、约 1.27 万块）+ `_extras.jsonl` + `_manifest.json`；
+- **基线**：本地 `data/source/*.md` + `data/chunks/*.chunks.jsonl`（+ 可选 `.extras.jsonl`）；
 - **覆盖层**：`edits/<group>__<stem>.jsonl`（15 字段快照）+ `.extras.jsonl` + `.meta.json`
   （`source_sha256 / saved_at / note / 每块 span 缓存 / manual 标记 / 改动统计`）；
 - 加载优先级：覆盖层 → 基线 → 现场跑 `chunk_file_full` 生成；

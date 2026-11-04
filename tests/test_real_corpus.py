@@ -38,8 +38,12 @@ class RealCorpusTest(unittest.TestCase):
         self.assertEqual(entry.kinds.get("clause"), 74)
 
     def test_config_default_points_here(self):
-        cfg = Config(fac_root=str(FAC_RAG))
-        self.assertEqual(Path(cfg.chunks_dir), CHUNKS_DIR)
+        from chunk_studio.config import REPO_ROOT
+
+        data_root = REPO_ROOT / "data"
+        if not (data_root / "source").is_dir():
+            self.skipTest("工作区没有 data/ 本地数据目录")
+        cfg = Config(data_root=str(data_root))
         self.assertEqual(cfg.validate(), [])
 
 

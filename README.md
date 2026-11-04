@@ -128,12 +128,11 @@ SplitChunkAssistant 把「自动切块」变成「可人工复核与修正的切
 ## 快速开始（P2 可用）
 
 ```bat
-:: 前提：本机已装 Python 3.10+，且 FAC-RAG 位于本仓库的兄弟目录
+:: 前提：本机已装 Python 3.10+，且 data/ 下有 source/ 与 chunks/（见下文「唯一数据源」）
 :: 方式一：双击 / 命令行
 run_studio.cmd
 
 :: 方式二：直接跑模块
-set FAC_ROOT=C:\Users\QiuYe\Desktop\FAC-RAG
 python -m chunk_studio.server --port 8790 --open
 ```
 
@@ -146,7 +145,7 @@ python -m chunk_studio.server --port 8790 --open
 
 浏览器打开 http://127.0.0.1:8790 ：
 
-- 左侧法规文件（分组 / 搜索 / 块数 / gate 徽章，本地数据源的文件带绿色「本地」徽章），点击打开三栏；
+- 左侧法规文件（分组 / 搜索 / 块数，点击打开三栏）；
 - 中间是原文 `.md` 的源码行（行号 gutter、标题/引用/表格/超长行折叠）；
 - 右侧是切片卡片（15 字段摘要 + extras + 对齐状态），顶部显示 `对齐 N/N (率) · 各档计数`；
 - hover 卡片 → 原文行淡高亮；hover 原文行 → 关联卡片标记；click 卡片 → 滚动并强高亮对应原文行；
@@ -156,26 +155,23 @@ python -m chunk_studio.server --port 8790 --open
 - 在原文拖选文字后**右键**（或直接在切片行上右键）：弹出工作栏，含「✂ 在此处拆分（光标处）/ ✚ 用选区新增切片 / ✂ 拆分此切片 / ✎ 编辑此切片正文·条号 / ⤴ 并入上一块 / ⤵ 并入下一块 / ✕ 删除此切片 / ◎ 定位到切片」，提交后右栏卡片与原文范围条立即刷新；「并入上一块」「并入下一块」两个方向都可用（合并后保留前一块的 id）；右键在无切片行时给「用这一行新增切片」；
 - 原文里拖选一段文字后点「＋新增」：弹层自动带入选区文本并记录行区间，提交后新块出现在原文对应行旁（范围条同步）；
 - 顶部 `+a ~m -r` 是相对基线的 diff，`未保存` 徽章表示有内存编辑，撤销/重做可逐步回退；
-- 「⚙ 设置」可改 `chunks_dir` / `fac_root` / 端口 / 各分组源目录，保存即生效。
+- 「⚙ 设置」可改 `data_root` / 端口 / 自动分 part 三项，保存即生效。
 
 首次运行会在仓库根目录生成 `config.json`（已 gitignore）：
 
 ```json
 {
-  "fac_root": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG",
-  "chunks_dir": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG\\data\\chunks_v2",
   "data_root": "data",
-  "source_roots": {},
-  "port": 8790
+  "port": 8790,
+  "auto_part": false,
+  "max_chars": 800,
+  "min_part_chars": 200
 }
 ```
 
-## 两种数据源（FAC-RAG 清单 / 本地两目录）
+## 唯一数据源：本地「两目录」（data/source + data/chunks）
 
-工作台可以同时读两种来源，左栏合并显示：
-
-1. **FAC-RAG 清单模式**（原有）：`chunks_dir` 下有 `_manifest.json` + `<分组>__<文件名>.jsonl` + `_extras.jsonl`，带 gate / warnings / sha256，默认 97 份 12,718 块。
-2. **本地两目录模式**（2026-11-04 新增）：配置 `data_root`（默认 `data/`，已 gitignore），约定如下：
+工作台只读本地两目录（2026-11-04 起移除 FAC-RAG `_manifest.json` 清单模式）：
 
 ```
 data/
@@ -183,14 +179,14 @@ data/
 │   └── 2025版山东省自由裁量标准.md
 └── chunks/                      ← 切片，文件名与源文件同名
     ├── 2025版山东省自由裁量标准.chunks.jsonl    ← 必需（每行一个块，缺 token_len 会现算）
-    └── 2025版山东省自由裁量标准.extras.jsonl    ← 可选（每行平铺，按 id 关联）
+    └── 2025版山东省自由裁量标准.extras.jsonl    ← 可选（每行平铺或 {"id","extras"} 嵌套）
 ```
 
-- 加新文档：把 `.md` 丢进 `source/`、把 `<同名>.chunks.jsonl`（和可选的 `.extras.jsonl`）丢进 `chunks/`，然后点页面顶部「**刷新**」——它会重新扫描目录（`POST /api/reload`），不用重启服务；子目录名会成为分组名（如 `data/子目录/`）。
-- 两目录配对靠「同名 + 同相对路径」，源文件缺失只记 warning，仍可查看切片。
+- 加新文档：把 `.md` 丢进 `source/`、把 `<同名>.chunks.jsonl`（和可选的 `.extras.jsonl`）丢进 `chunks/`，然后点页面顶部「**刷新**」——它会重新扫描目录（`POST /api/reload`），不用重启服务；子目录名会成为分组名。
+- 两目录配对靠「同名 + 同相对路径」；`chunks/` 决定文件是否出现，`source/` 只作对照——缺源文件时文件仍列出，但打开会提示「源文件缺失」。
 - `.extras.jsonl` 两种写法都支持：字段平铺（切块包风格）或 `{"id": …, "extras": {…}}` 嵌套（FAC-RAG 风格）。
 - 本地源没有 gate/sha256 等质检信息，界面对应位置显示「—」；对齐、编辑、表格视图、行选择全部照常可用。
-- 设置面板（⚙ 设置）里可改 `data_root`，留空则只读 FAC-RAG 清单；两者至少一个可用即可启动。
+- 设置面板（⚙ 设置）里可改 `data_root`、端口、自动分 part 三项；`data_root` 必填（默认 `data/`，已 gitignore）。
 
 验收 / 自测口径（单测覆盖）：
 
@@ -198,8 +194,8 @@ data/
 python -m unittest discover -s tests -t . -v   :: 161 个测试
 ```
 
-- `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60；配置本地数据源后 `mode=both`，合计 **98 文件 / 13 475 块**（多一组 `data: 757`），`sources` 列出两个源
-- 本地数据源实测：`data/2025版山东省自由裁量标准` 757 块 / 606 行，对齐 **756/757（99.87%）**；`/api/tables` 返回 687 张表（首表 headers `编号|违法行为|法律规定|处罚依据|裁量阶次|适用条件|处罚标准`）
+- `/api/files` 合计 **3 个文件 / 1 046 块**（山东自由裁量 757 + 2464 104 + 2972 185），`mode=dirs`、单组 `data`
+- 实测：`data/2025版山东省自由裁量标准` 757 块 / 606 行，对齐 **756/757（99.87%）**；`/api/tables` 返回 687 张表（首表 headers `编号|违法行为|法律规定|处罚依据|裁量阶次|适用条件|处罚标准`）
 - `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
 - `/api/tables?key=…` 返回该文件所有表块的 `table_grid`（`chunk_id → {headers, rows, width, header_rows, note_from, table_label, table_title, table_mode, table_rows}`，最近 8 个文件缓存）；用于右栏表格可视化，缺 key 400、未知 key 404
 - 消防法：411 行 / 74 块 / 对齐 **74/74（100%）**

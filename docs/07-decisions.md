@@ -118,6 +118,14 @@
 
 ---
 
+
+## D19 · 只保留本地两目录数据源，移除 FAC-RAG manifest 模式（2026-11-04）
+
+- **背景**：D18 让两种数据源并存，左栏同时列 97 份产物与 data/ 文件，设置里四处目录、理解成本高。
+- **决定**：`data_root`（`source/` + `chunks/`）成为唯一数据源；`Studio` 只建 `DirManifest` 单桥、`/api/files` 单组 `data`、设置面板只留 `data_root` + 端口 + 自动分 part 三项。`Manifest`/`FacBridge(chunks_dir)` 代码保留（历史与工具兼容、单测仍覆盖），但工作台不再加载。
+- **理由**：用户明确要「只保留本地文件的检索接口，作为唯一一个接口」；本地两目录也已覆盖日常加文件场景（丢文件 + 刷新）。
+- **后果**：旧 `config.json` 里的 `fac_root`/`chunks_dir`/`source_roots` 被忽略（`Config` 字段保留，不参与校验）；配置校验只要求 `data_root` 可用；README/docs 同步改口径；测试 fixture 从 manifest 目录改为 data 目录。
+
 ## 待定问题
 
 | # | 问题 | 倾向 |

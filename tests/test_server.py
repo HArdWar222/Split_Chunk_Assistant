@@ -10,14 +10,14 @@ from chunk_studio import server as srv
 from chunk_studio.api import App
 from chunk_studio.config import Config
 from chunk_studio.studio import Studio
-from tests.fixtures import make_chunks_dir, remove, temp_dir
+from tests.fixtures import make_two_file_data_dir, remove, temp_dir
 
 
 class ExistingInstanceTest(unittest.TestCase):
     def setUp(self):
         self._tmp = temp_dir()
-        self.chunks_dir = make_chunks_dir(self._tmp)
-        cfg = Config(fac_root=str(self._tmp), chunks_dir=str(self.chunks_dir))
+        self.data_root = make_two_file_data_dir(self._tmp)
+        cfg = Config(data_root=str(self.data_root))
         self.studio = Studio(cfg=cfg, config_path=self._tmp / "config.json")
         self.app = App(self.studio)
 

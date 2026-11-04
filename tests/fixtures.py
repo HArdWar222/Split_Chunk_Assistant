@@ -240,3 +240,63 @@ def make_data_dir(base: Path, extras_style: str = "flat") -> Path:
     _write_jsonl(chunks_dir / (name + ".extras.jsonl"), extras)
     return data_root
 
+
+def make_two_file_data_dir(base: Path, root_name: str = "store") -> Path:
+    """本地两目录源的「两文件」版本：复刻 make_chunks_dir 的内容。
+
+    供 test_api / test_server 使用：key 是 ``store/<law_name>``（无子目录时
+    group 固定 ``store``），chunk 只有 14 字段、无 token_len。
+    """
+    data_root = base / root_name
+    source_dir = data_root / "source"
+    chunks_dir = data_root / "chunks"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    (source_dir / "测试法.md").write_text(
+        "# 测试法\n\n第一条 为了测试。\n\n第二条 测试结束。\n", encoding="utf-8"
+    )
+    (source_dir / "GB 0001-2020 测试标准.md").write_text(
+        "# 测试标准\n\n1 范围\n本文件规定了测试要求。\n", encoding="utf-8"
+    )
+
+    def row(cid, text, law_name, law_num, kind="clause"):
+        return {
+            "id": cid,
+            "chunk": text,
+            "law_name": law_name,
+            "law_num": law_num,
+            "law_invalid": "2030-12-12",
+            "law_type": "",
+            "law_level": "",
+            "issuer": "",
+            "effective_date": "",
+            "chunk_kind": kind,
+            "source": "",
+            "part_index": "1",
+            "part_total": "1",
+            "chunk_hash": "f" * 16,
+        }
+
+    chunks1 = [
+        row("测试法-0001", "第一条 为了测试。", "测试法", "第一条"),
+        row("测试法-0002", "第二条 测试结束。", "测试法", "第二条"),
+    ]
+    chunks2 = [
+        row("GB 0001-2020 测试标准-0001", "1 范围\n本文件规定了测试要求。", "GB 0001-2020 测试标准", "1"),
+    ]
+    _write_jsonl(chunks_dir / "测试法.chunks.jsonl", chunks1)
+    _write_jsonl(chunks_dir / "GB 0001-2020 测试标准.chunks.jsonl", chunks2)
+
+    _write_jsonl(
+        chunks_dir / "测试法.extras.jsonl",
+        [
+            {"id": "测试法-0001", "region": "body", "profile": "statute_cn_law"},
+            {"id": "测试法-0002", "region": "body"},
+        ],
+    )
+    _write_jsonl(
+        chunks_dir / "GB 0001-2020 测试标准.extras.jsonl",
+        [{"id": "GB 0001-2020 测试标准-0001", "region": "body", "probe": {"family": "standard"}}],
+    )
+    return data_root
