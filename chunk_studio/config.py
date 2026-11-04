@@ -68,6 +68,11 @@ class Config:
     auto_part: bool = False
     max_chars: int = 800
     min_part_chars: int = 200
+    # 自动切块：发现 source/ 下没有 chunks 的 md 时调用 vendored 引擎子进程
+    auto_chunk: bool = True
+    chunker_root: str = ""  # 空=自动探测 vendor/splitchunk，其次 ../SPLITCHUNK
+    chunker_poll: int = 3  # 轮询秒数
+    chunker_strategy: str = "auto"  # auto | profile
 
     def __post_init__(self) -> None:
         if not self.fac_root:
@@ -90,6 +95,13 @@ class Config:
             self.min_part_chars = int(self.min_part_chars)
         except (TypeError, ValueError):
             raise ConfigError("max_chars / min_part_chars 必须是整数") from None
+        self.auto_chunk = bool(self.auto_chunk)
+        self.chunker_root = _abs_path(_clean_path(self.chunker_root))
+        try:
+            self.chunker_poll = int(self.chunker_poll)
+        except (TypeError, ValueError):
+            raise ConfigError(f"chunker_poll 必须是整数：{self.chunker_poll!r}") from None
+        self.chunker_strategy = str(self.chunker_strategy or "auto")
 
     # -- 序列化 ---------------------------------------------------------
     def to_dict(self) -> dict:
@@ -102,6 +114,10 @@ class Config:
             "auto_part": self.auto_part,
             "max_chars": self.max_chars,
             "min_part_chars": self.min_part_chars,
+            "auto_chunk": self.auto_chunk,
+            "chunker_root": self.chunker_root,
+            "chunker_poll": self.chunker_poll,
+            "chunker_strategy": self.chunker_strategy,
         }
 
     @classmethod
@@ -116,6 +132,10 @@ class Config:
             auto_part=bool(data.get("auto_part", False)),
             max_chars=data.get("max_chars", 800),
             min_part_chars=data.get("min_part_chars", 200),
+            auto_chunk=bool(data.get("auto_chunk", True)),
+            chunker_root=str(data.get("chunker_root") or ""),
+            chunker_poll=data.get("chunker_poll", 3),
+            chunker_strategy=str(data.get("chunker_strategy") or "auto"),
         )
 
     # -- 加载 / 保存 ----------------------------------------------------
@@ -172,6 +192,10 @@ class Config:
             auto_part=patch.get("auto_part", self.auto_part),
             max_chars=patch.get("max_chars", self.max_chars),
             min_part_chars=patch.get("min_part_chars", self.min_part_chars),
+            auto_chunk=patch.get("auto_chunk", self.auto_chunk),
+            chunker_root=patch.get("chunker_root", self.chunker_root),
+            chunker_poll=patch.get("chunker_poll", self.chunker_poll),
+            chunker_strategy=patch.get("chunker_strategy", self.chunker_strategy),
         )
 
     # -- 校验 -----------------------------------------------------------
@@ -213,6 +237,10 @@ class Config:
             errors.append(
                 f"min_part_chars 必须在 1–max_chars 之间：{self.min_part_chars}"
             )
+        if not (1 <= self.chunker_poll <= 60):
+            errors.append(f"chunker_poll 必须在 1–60 秒之间：{self.chunker_poll}")
+        if self.chunker_strategy not in ("auto", "profile"):
+            errors.append(f"chunker_strategy 只能是 auto 或 profile：{self.chunker_strategy}")
         return errors
 
     def require_valid(self) -> None:

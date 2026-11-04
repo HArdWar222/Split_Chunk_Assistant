@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __phase__, __version__
+from .chunker import ChunkerError
 from .config import ConfigError
 from .manifest import ManifestError, SourceMissingError
 from .ops import OpError, OpNotFound
@@ -62,6 +63,8 @@ class App:
             return _json({"ok": False, "error": str(exc)}, 400)
         except ConfigError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
+        except ChunkerError as exc:
+            return _json({"ok": False, "error": str(exc)}, 400)
         except ManifestError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
         except Exception:  # noqa: BLE001 - 兜底，避免服务因单次请求崩溃
@@ -98,6 +101,29 @@ class App:
                 },
                 200 if ok else 503,
             )
+
+        if method == "GET" and path == "/api/watch":
+            return _json(self.studio.watch.snapshot())
+
+        if method == "POST" and path == "/api/watch":
+            data = self._read_json(body)
+            if "enabled" in data:
+                self.studio.update_config({"auto_chunk": bool(data.get("enabled"))})
+            snapshot = self.studio.watch.snapshot()
+            return _json(
+                {
+                    "ok": True,
+                    "watch": snapshot,
+                    "message": "已开启自动切块" if snapshot.get("enabled") else "已关闭自动切块",
+                }
+            )
+
+        if method == "POST" and path == "/api/chunk":
+            data = self._read_json(body)
+            key = str(data.get("key") or "").strip()
+            result = self.studio.watch.trigger(subjects=[key] if key else None)
+            status = 200 if result.get("ok") else 409
+            return _json({**result, "watch": self.studio.watch.snapshot()}, status)
 
         if method == "GET" and path == "/api/config":
             return _json(self.studio.config_payload())

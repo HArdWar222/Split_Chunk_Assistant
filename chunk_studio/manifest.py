@@ -23,6 +23,7 @@ EXTRAS_NAME = "_extras.jsonl"
 #: 「本地两目录」约定下的文件名后缀。
 CHUNKS_SUFFIX = ".chunks.jsonl"
 EXTRAS_SUFFIX = ".extras.jsonl"
+REPORT_SUFFIX = ".report.json"
 
 
 class ManifestError(RuntimeError):
@@ -286,6 +287,10 @@ class DirManifest:
             extras_path = path.with_name(name + EXTRAS_SUFFIX)
             extras_count = _count_lines(extras_path)
             coverage = round(chars / source_chars, 4) if source_chars else 0.0
+            report = _scan_report(path.with_name(name + REPORT_SUFFIX))
+            gate_ok = report.get("gate_ok", True) if report else True
+            for failure in report.get("failures", []):
+                warnings.append(f"gate：{failure}")
             self.files[key] = FileEntry(
                 key=key,
                 group=group,
@@ -295,7 +300,7 @@ class DirManifest:
                 n_chunks=n_chunks,
                 kinds=kinds,
                 char_coverage=coverage,
-                gate_ok=True,
+                gate_ok=gate_ok,
                 warnings=warnings,
                 extras_count=extras_count,
                 local=True,
@@ -429,3 +434,27 @@ def _count_lines(path: Path) -> int:
             if line.strip():
                 count += 1
     return count
+
+
+def _scan_report(path: Path) -> dict:
+    """读切块引擎的 ``<stem>.report.json``（gate 与版本信息），坏文件返回空字典。"""
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    gate = payload.get("gate")
+    if not isinstance(gate, dict):
+        gate = {}
+    failures = gate.get("failures")
+    if not isinstance(failures, list):
+        failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+    return {
+        "gate_ok": bool(gate.get("ok", True)),
+        "failures": [str(x) for x in failures],
+        "engine_version": str(payload.get("engine_version") or ""),
+        "source_sha256": str(payload.get("source_sha256") or ""),
+    }

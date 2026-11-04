@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .align import align_chunks, summarize_align
 from .autopart import auto_part_chunks
+from .chunker import WatchService, engine_info
 from .config import Config, ConfigError
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, ManifestError
@@ -80,6 +81,8 @@ class Studio:
         self._ops: dict[str, list[dict]] = {}
         self._redo: dict[str, list[dict]] = {}
         self._init_bridge()
+        # 自动切块 / 轮询（引擎调用是子进程，工作台本身不 import 引擎）
+        self.watch = WatchService(self)
 
     # -- 内部 -----------------------------------------------------------
     def _init_bridge(self) -> None:
@@ -166,6 +169,11 @@ class Studio:
             "auto_part": self.cfg.auto_part,
             "max_chars": self.cfg.max_chars,
             "min_part_chars": self.cfg.min_part_chars,
+            "auto_chunk": self.cfg.auto_chunk,
+            "chunker_root": self.cfg.chunker_root or str(engine_info(self.cfg).get("root") or ""),
+            "chunker_poll": self.cfg.chunker_poll,
+            "chunker_strategy": self.cfg.chunker_strategy,
+            "engine": engine_info(self.cfg),
             "errors": self.cfg.validate(),
             "data_ok": self._data_bridge is not None,
             "data_error": self._data_error,

@@ -885,3 +885,21 @@ body.row-picking { user-select: none; }
 
 /* 编辑后重渲染时由 JS 精确恢复滚动位置，关闭浏览器自动滚动锚定，避免几像素漂移 */
 #source, #chunks { overflow-anchor: none; }
+
+/* 自动切块状态 chip（顶部工具栏） */
+.watch-chip {
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--panel);
+  white-space: nowrap;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.watch-chip.ok { color: #0f766e; border-color: #b7e4d8; background: #e8f7f3; }
+.watch-chip.warn { color: #92400e; border-color: #fcd34d; background: #fef3c7; }
+.watch-chip.err { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }

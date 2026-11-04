@@ -90,6 +90,11 @@
     autoPart: document.getElementById("cfg-auto-part"),
     maxChars: document.getElementById("cfg-max-chars"),
     minPartChars: document.getElementById("cfg-min-part-chars"),
+    autoChunk: document.getElementById("cfg-auto-chunk"),
+    chunkerRoot: document.getElementById("cfg-chunker-root"),
+    chunkerPoll: document.getElementById("cfg-chunker-poll"),
+    btnChunk: document.getElementById("btn-chunk"),
+    watchChip: document.getElementById("watch-chip"),
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
     toast: document.getElementById("toast"),
@@ -3156,6 +3161,9 @@
     if (el.autoPart) el.autoPart.checked = !!cfg.auto_part;
     if (el.maxChars) el.maxChars.value = cfg.max_chars || 800;
     if (el.minPartChars) el.minPartChars.value = cfg.min_part_chars || 200;
+    if (el.autoChunk) el.autoChunk.checked = cfg.auto_chunk !== false;
+    if (el.chunkerRoot) el.chunkerRoot.value = cfg.chunker_root || "";
+    if (el.chunkerPoll) el.chunkerPoll.value = cfg.chunker_poll || 3;
     el.cfgErrors.hidden = true;
     el.cfgErrors.textContent = "";
     el.dialog.showModal();
@@ -3167,7 +3175,10 @@
       port: parseInt(el.port.value, 10) || 8790,
       auto_part: !!(el.autoPart && el.autoPart.checked),
       max_chars: parseInt(el.maxChars && el.maxChars.value, 10) || 800,
-      min_part_chars: parseInt(el.minPartChars && el.minPartChars.value, 10) || 200
+      min_part_chars: parseInt(el.minPartChars && el.minPartChars.value, 10) || 200,
+      auto_chunk: !!(el.autoChunk && el.autoChunk.checked),
+      chunker_root: el.chunkerRoot ? el.chunkerRoot.value.trim() : "",
+      chunker_poll: parseInt(el.chunkerPoll && el.chunkerPoll.value, 10) || 3
     };
   }
 
@@ -3184,6 +3195,7 @@
       var keepKey = state.docKey || keyFromHash();
       // 自动分 part / 阈值变化要立刻在当前文档上生效：文件清单刷新后再载入当前文件
       loadFiles().then(function () { if (keepKey) selectByKey(keepKey); });
+      pollWatch();
     }).catch(function (err) {
       el.cfgErrors.hidden = false;
       el.cfgErrors.textContent = err.message;
@@ -3191,6 +3203,89 @@
     }).finally(function () {
       btn.disabled = false;
       btn.textContent = "保存";
+    });
+  }
+
+  // ---------- 自动切块（SPLITCHUNK 子进程） ----------
+  var watchState = { data: null, timer: null, lastTs: 0, completing: false };
+
+  function renderWatchChip(w) {
+    if (!el.watchChip) return;
+    var running = !!(w && w.running);
+    var pending = (w && w.pending) || 0;
+    if (running) {
+      el.watchChip.hidden = false;
+      el.watchChip.className = "watch-chip ok";
+      el.watchChip.textContent = "切块中 " + (w.done || 0) + "/" + (w.total || 0) + (w.current ? " · " + w.current.split("/").pop() : "");
+      return;
+    }
+    if (pending > 0) {
+      el.watchChip.hidden = false;
+      el.watchChip.className = "watch-chip warn";
+      el.watchChip.textContent = "待切块 " + pending + " 份" + (w.enabled ? " · 自动处理中" : " · 点 ⚙ 切块");
+      return;
+    }
+    if (w && w.last && Date.now() / 1000 - (w.last.ts || 0) < 8) {
+      el.watchChip.hidden = false;
+      el.watchChip.className = "watch-chip" + (w.last.failed ? " err" : " ok");
+      el.watchChip.textContent = w.last.message || "切块完成";
+      return;
+    }
+    el.watchChip.hidden = true;
+  }
+
+  function watchFinished(w) {
+    if (watchState.completing) return;
+    var last = w && w.last;
+    if (!last || !last.ts || last.ts <= watchState.lastTs) return;
+    watchState.lastTs = last.ts;
+    watchState.completing = true;
+    var key = state.docKey || keyFromHash();
+    postJSON("/api/reload", {}).then(function (res) {
+      state.data = res.files;
+      state.config = res.files.config || state.config;
+      state.doc = null;
+      renderStats(state.data);
+      renderTree();
+      if (key) selectByKey(key);
+      showToast(last.message || "切块完成", last.failed ? "err" : (last.gate ? "warn" : "ok"));
+    }).catch(function () {
+      loadFiles();
+    }).finally(function () {
+      watchState.completing = false;
+    });
+  }
+
+  function applyWatch(w) {
+    watchState.data = w;
+    renderWatchChip(w);
+    watchFinished(w);
+  }
+
+  function pollWatch() {
+    if (watchState.timer) window.clearTimeout(watchState.timer);
+    getJSON("/api/watch").then(function (w) {
+      applyWatch(w);
+    }).catch(function () { /* 服务未就绪时静默 */ }).finally(function () {
+      watchState.timer = window.setTimeout(pollWatch, 2000);
+    });
+  }
+
+  function triggerChunk() {
+    var btn = el.btnChunk;
+    if (btn && btn.disabled) return;
+    if (btn) { btn.disabled = true; btn.textContent = "扫描中…"; }
+    postJSON("/api/chunk", {}).then(function (res) {
+      applyWatch(res.watch);
+      if (!res.started) {
+        showToast(res.message || "没有待切块的文件", "ok");
+      } else {
+        showToast("开始切块：" + res.total + " 份", "ok");
+      }
+    }).catch(function (err) {
+      showToast("切块失败：" + err.message, "err");
+    }).finally(function () {
+      if (btn) { btn.disabled = false; btn.textContent = "⚙ 切块"; }
     });
   }
 
@@ -3239,6 +3334,12 @@
       });
     });
     el.btnSettings.addEventListener("click", openSettings);
+    if (el.btnChunk) {
+      el.btnChunk.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        triggerChunk();
+      });
+    }
     el.btnCancel.addEventListener("click", function () { el.dialog.close(); });
     el.form.addEventListener("submit", saveSettings);
     var laneToggle = document.getElementById("toggle-lanes");
@@ -3350,4 +3451,5 @@
   bindEvents();
   initHealth();
   loadFiles();
+  pollWatch();
 })();

@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     app = App(studio)
+    studio.watch.start()
     running = _existing_instance(port)
     if running:
         print(f"127.0.0.1:{port} 上已经有一个 SplitChunkAssistant 在运行：{running}", flush=True)
@@ -173,7 +174,12 @@ def main(argv: list[str] | None = None) -> int:
 
     url = f"http://127.0.0.1:{port}/"
     print(f"SplitChunkAssistant {__version__}（{__phase__}）已启动：{url}", flush=True)
-    print(f"  切块产物：{studio.cfg.chunks_dir}", flush=True)
+    print(f"  数据目录：{studio.cfg.data_root}", flush=True)
+    engine = studio.watch.snapshot().get("engine") or {}
+    if engine.get("ok"):
+        print(f"  切块引擎：{engine.get('root')}（{engine.get('version') or '?'}）", flush=True)
+    else:
+        print(f"  [!] 切块引擎不可用：{engine.get('error')}", flush=True)
     files = studio.files_payload()
     if files.get("ok"):
         totals = files.get("totals") or {}

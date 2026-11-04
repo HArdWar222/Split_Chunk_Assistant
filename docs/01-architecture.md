@@ -59,7 +59,9 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 │   ├── ops.py               (~220 行) 编辑命令（含逆操作）
 │   ├── overlay.py           (~130 行) edits/ 读写 + sha256 校验
 │   ├── rechunk.py           (~120 行) 参数重切
-│   ├── fac_bridge.py        (~150 行) FAC-RAG 适配
+│   ├── fac_bridge.py        (~150 行) 数据源适配（Manifest / DirManifest）
+│   ├── autopart.py          (~260 行) 自动分 part（文本均分 / 表格按行拆块）
+│   ├── chunker.py           (~410 行) SPLITCHUNK 引擎定位 / 待切扫描 / 子进程 CLI / WatchService（轮询 + 单 worker）
 │   └── web\
 │       ├── index.html
 │       ├── style.css

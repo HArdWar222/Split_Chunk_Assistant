@@ -326,6 +326,30 @@ class AppTest(unittest.TestCase):
         self.assertFalse(data["dirty"])
         self.assertEqual(data["edits"]["n_ops"], 0)
 
+    # -- /api/watch、/api/chunk -------------------------------------
+    def test_watch_snapshot(self):
+        status, data = self.body(self.get("/api/watch"))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["engine"]["ok"])
+        self.assertTrue(data["engine"]["version"])
+        self.assertEqual(data["pending"], 0)
+        self.assertTrue(data["enabled"])
+
+    def test_watch_toggle(self):
+        status, data = self.body(self.post("/api/watch", {"enabled": False}))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["watch"]["enabled"])
+        saved = Config.load(self.config_path)
+        self.assertFalse(saved.auto_chunk)
+
+    def test_chunk_without_pending(self):
+        status, data = self.body(self.post("/api/chunk", {}))
+        self.assertEqual(status, 200)
+        self.assertFalse(data["started"])
+        self.assertIn("没有待切", data["message"])
+
     # -- /api/tables ------------------------------------------------
     def tables(self, key: str):
         return self.body(self.get("/api/tables?key=" + quote(key, safe="")))

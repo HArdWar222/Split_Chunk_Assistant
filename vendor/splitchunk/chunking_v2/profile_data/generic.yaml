@@ -1,0 +1,24 @@
+# 工作区沙盒 profile：只用于 Phase 2-4 联调 / 端到端冒烟，不是生产配置。
+# 名字故意叫 generic：select_profile 在 family 无专属 profile 时按 profiles["generic"] 兜底。
+name: generic
+family: generic
+description: "工作区沙盒 profile（Phase 2-4 联调用）"
+
+render:
+  max_chars: 800
+
+tables:
+  mode: model
+  row_overflow: cell
+  cont_tolerance: 0.8
+  # generic 文档没有「表1 标题」这类表题行时，靠结构信号认表（M8b 起的设计开关）
+  unlabeled: true
+
+split:
+  soft_max_chars: 500
+  combine_under_chars: 120
+  separators: ["\n\n", "\n", "。", "；", "，"]
+  protect_fences: true
+
+gate:
+  strict_tables: false

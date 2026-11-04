@@ -155,7 +155,8 @@ python -m chunk_studio.server --port 8790 --open
 - 在原文拖选文字后**右键**（或直接在切片行上右键）：弹出工作栏，含「✂ 在此处拆分（光标处）/ ✚ 用选区新增切片 / ✂ 拆分此切片 / ✎ 编辑此切片正文·条号 / ⤴ 并入上一块 / ⤵ 并入下一块 / ✕ 删除此切片 / ◎ 定位到切片」，提交后右栏卡片与原文范围条立即刷新；「并入上一块」「并入下一块」两个方向都可用（合并后保留前一块的 id）；右键在无切片行时给「用这一行新增切片」；
 - 原文里拖选一段文字后点「＋新增」：弹层自动带入选区文本并记录行区间，提交后新块出现在原文对应行旁（范围条同步）；
 - 顶部 `+a ~m -r` 是相对基线的 diff，`未保存` 徽章表示有内存编辑，撤销/重做可逐步回退；
-- 「⚙ 设置」可改 `data_root` / 端口 / 自动分 part 三项，保存即生效。
+- 「⚙ 设置」可改 `data_root` / 端口 / 自动分 part 三项 / 自动切块三项，保存即生效。
+- 顶部「⚙ 切块」按钮可手动触发待切文件（自动切块默认开启，见下节）。
 
 首次运行会在仓库根目录生成 `config.json`（已 gitignore）：
 
@@ -165,7 +166,11 @@ python -m chunk_studio.server --port 8790 --open
   "port": 8790,
   "auto_part": false,
   "max_chars": 800,
-  "min_part_chars": 200
+  "min_part_chars": 200,
+  "auto_chunk": true,
+  "chunker_root": "",
+  "chunker_poll": 3,
+  "chunker_strategy": "auto"
 }
 ```
 
@@ -188,13 +193,24 @@ data/
 - 本地源没有 gate/sha256 等质检信息，界面对应位置显示「—」；对齐、编辑、表格视图、行选择全部照常可用。
 - 设置面板（⚙ 设置）里可改 `data_root`、端口、自动分 part 三项；`data_root` 必填（默认 `data/`，已 gitignore）。
 
+## 自动切块（SPLITCHUNK 引擎）
+
+`data/source/` 里出现新 `.md`、而 `chunks/` 里还没有同名切片时，工作台会自动调用切块引擎生成切片，再刷新左栏：
+
+- 引擎是上游 `chunking_v2`（0.1.4）的副本，放在 `vendor/splitchunk/`（随仓库提交，`vendor/splitchunk/UPSTREAM.md` 记录来源与 sha256、许可提醒）；设置里「切块引擎目录」留空即自动探测（`vendor/splitchunk`，找不到回退 `../SPLITCHUNK`）。
+- 工作台**不把引擎装进自己的进程**：每份文件起一次 `python -m chunking_v2.cli …--json` 子进程，产物 `<名>.chunks.jsonl / .extras.jsonl / .report.json` 直接写进 `chunks/`；子进程挂了只记录失败，不影响工作台。
+- 轮询间隔默认 3 秒（设置可改 1–60），mtime 小于 1.5 秒的文件先跳过（防半文件）；同一时刻只有一个切块任务。
+- `report.json` 里带 gate 结果，左栏文件行相应显示 ✓ / ⚠；源文件改过（sha256 变化）时被列为「过期」，默认不自动重切，避免重排 id 影响手改叠加层——需要重切就手动触发。
+- 手动：顶部「⚙ 切块」扫描待切文件并异步切块；工具栏左侧 chip 显示「切块中 n/m」「待切块 N 份」或上一次结果（8 秒）。
+- 设置项：`auto_chunk`（默认开）、`chunker_root`（留空自动）、`chunker_poll`（秒）、`chunker_strategy`（`auto`/`profile`）。
+
 验收 / 自测口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 161 个测试
+python -m unittest discover -s tests -t . -v   :: 173 个测试
 ```
 
-- `/api/files` 合计 **3 个文件 / 1 046 块**（山东自由裁量 757 + 2464 104 + 2972 185），`mode=dirs`、单组 `data`
+- `/api/files` 合计 **4 个文件 / 1 175 块**（山东自由裁量 757 + 2464 104 + 2972 185 + 安全生产法 129），`mode=dirs`、单组 `data`
 - 实测：`data/2025版山东省自由裁量标准` 757 块 / 606 行，对齐 **756/757（99.87%）**；`/api/tables` 返回 687 张表（首表 headers `编号|违法行为|法律规定|处罚依据|裁量阶次|适用条件|处罚标准`）
 - `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
 - `/api/tables?key=…` 返回该文件所有表块的 `table_grid`（`chunk_id → {headers, rows, width, header_rows, note_from, table_label, table_title, table_mode, table_rows}`，最近 8 个文件缓存）；用于右栏表格可视化，缺 key 400、未知 key 404

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.26-p2z">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.27-p3a">
 </head>
 <body>
   <header class="topbar">
@@ -21,6 +21,8 @@
       <button id="btn-redo" type="button" class="btn" title="重做（Ctrl+Shift+Z）" disabled>↷ 重做</button>
     </div>
     <div class="actions">
+      <span class="watch-chip" id="watch-chip" hidden></span>
+      <button id="btn-chunk" type="button" class="btn" title="扫描 data/source 里还没切块的文件并调用 SPLITCHUNK 切块">⚙ 切块</button>
       <button id="btn-refresh" type="button" class="btn">刷新</button>
       <button id="btn-settings" type="button" class="btn">⚙ 设置</button>
     </div>
@@ -105,6 +107,21 @@
       <label class="field">
         <span>最小 part 长度 <code>min_part_chars</code>（默认 200，仅文本 part 用）</span>
         <input id="cfg-min-part-chars" type="number" min="1">
+      </label>
+
+      <label class="field inline-field">
+        <span>自动切块 <code>auto_chunk</code>（探测到 source 里新文件就用 SPLITCHUNK 切块）</span>
+        <input id="cfg-auto-chunk" type="checkbox">
+      </label>
+
+      <label class="field">
+        <span>切块引擎目录 <code>chunker_root</code>（留空=自动找 vendor/splitchunk）</span>
+        <input id="cfg-chunker-root" type="text" placeholder="留空自动探测" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>轮询间隔 <code>chunker_poll</code>（秒，1–60，默认 3）</span>
+        <input id="cfg-chunker-poll" type="number" min="1" max="60">
       </label>
 
       <div class="dialog-errors" id="cfg-errors" hidden></div>
@@ -194,6 +211,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.26-p2z" defer></script>
+  <script src="/static/app.js?v=0.3.27-p3a" defer></script>
 </body>
 </html>

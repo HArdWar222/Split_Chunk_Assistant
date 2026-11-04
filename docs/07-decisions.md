@@ -126,6 +126,13 @@
 - **理由**：用户明确要「只保留本地文件的检索接口，作为唯一一个接口」；本地两目录也已覆盖日常加文件场景（丢文件 + 刷新）。
 - **后果**：旧 `config.json` 里的 `fac_root`/`chunks_dir`/`source_roots` 被忽略（`Config` 字段保留，不参与校验）；配置校验只要求 `data_root` 可用；README/docs 同步改口径；测试 fixture 从 manifest 目录改为 data 目录。
 
+## D20 · 接入 SPLITCHUNK 切块引擎：vendor 副本 + 子进程 CLI（2026-11-04）
+
+- **背景**：`data/source/` 放新原文件后，工作台只能「等别人切好」或手动导包；上游 SPLITCHUNK（`chunking_v2` 0.1.4）已能直接产出同约定的 `.chunks.jsonl` + `.extras.jsonl` + `.report.json`。
+- **决定**：把引擎包（26 文件 / 332 KB）以 vendor 方式放进 `vendor/splitchunk/`（`UPSTREAM.md` 记来源/版本/sha256/许可提醒）；工作台**不 import** 引擎，而是每份文件起一个 `python -m chunking_v2.cli … --json` 子进程，产物直接写 `data/chunks/`，`report.json` 的 gate 结果进左栏徽标；轮询 3 秒探测「有源文件、无同名切片」，单 worker 自动切；工具栏「⚙ 切块」手动触发。**不做同步工具**（用户明确要求），升级引擎靠手工覆盖 vendor 并更新 `UPSTREAM.md`。
+- **理由**：子进程让工作台保持纯 stdlib、引擎崩溃/超时不影响服务；vendor 固定版本可重现；「探测 + 子进程 + 单 worker」比把引擎 API 拉进进程简单得多。
+- **后果**：需要 Python 环境里装引擎依赖（PyYAML）；`vendor/` 随仓库变大（约 333 KB）；源文件改动（sha256 变化）默认列为「过期」但不自动重切，避免重排 id 影响手改；引擎许可为 Proprietary，对外分发前需确认。
+
 ## 待定问题
 
 | # | 问题 | 倾向 |
