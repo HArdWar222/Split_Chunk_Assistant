@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import difflib
 import html
 import re
 from typing import Any, Iterable
@@ -29,11 +30,17 @@ RE_TAG = re.compile(r"<[^>]+>")
 RE_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 RE_PAGE_TAIL = re.compile(r"[.．·…]{3,}\s*\d+\s*$")
 RE_CONT_SUFFIX = re.compile(r"（续）\s*$")
+RE_CAPTION = re.compile(r"^表\s*[A-Za-z]?\s*[.．]?\s*\d")
 
 DEFAULT_CLEAN_RULES = ("latex_escapes",)
 
 #: 单行 ≥ 该字符数时视为「膨胀后的整张 HTML 表」，同一行可被多个表格块复用。
 HUGE_LINE_CHARS = 2000
+
+#: 首行精确/子串都失败时，允许的相似度兜底（上下标 <sup>2</sup>、符号差异等）。
+SIMILAR_RATIO = 0.93
+SIMILAR_MIN_LEN = 10
+SIMILAR_WINDOW = 600
 
 
 def strip_html(s: str) -> str:
@@ -128,12 +135,23 @@ def row_variants(cells: Any) -> list[str]:
     return [v for v in variants if v]
 
 
+def _is_table_line(raw: str) -> bool:
+    """这一行本身是「整张表」（HTML 单行或超长膨胀行）→ 表格块的多行可复用同一行。"""
+    if len(raw) >= HUGE_LINE_CHARS:
+        return True
+    low = raw.lstrip().lower()
+    return low.startswith("<table") or ("<table" in low and "<tr" in low)
+
+
 def _scan(lines: list[str], target: str, start: int, *, allow_substr: bool = True) -> int:
     """从 start 起找第一个等于 target（或包含 target）的行。
 
     单趟扫描、先到先得：优先保证「源行顺序」，而不是「全局找精确匹配」。
     （例：附录标题在源文里写作 ``# （资料性附录）``，若先全局找精确匹配
     会跳到文末的 ``（资料性附录）``，把后续表格块的游标带偏。）
+
+    精确/子串都失败时，再在窗口内找「相似度足够高」的行（兜底上下标
+    ``<sup>2</sup>`` 被清洗掉、全角/半角符号等差异，避免这类块整块 miss）。
     """
     if not target:
         return -1
@@ -143,7 +161,34 @@ def _scan(lines: list[str], target: str, start: int, *, allow_substr: bool = Tru
             return i
         if allow_substr and len(target) >= 2 and target in lines[i]:
             return i
-    return -1
+    if len(target) < SIMILAR_MIN_LEN:
+        return -1
+    best = -1
+    best_ratio = 0.0
+    for i in range(start, min(n, start + SIMILAR_WINDOW)):
+        cand = lines[i]
+        if not cand:
+            continue
+        if abs(len(cand) - len(target)) > max(8, len(target) // 4):
+            continue
+        ratio = difflib.SequenceMatcher(None, target, cand).ratio()
+        if ratio > best_ratio:
+            best_ratio, best = ratio, i
+    return best if best_ratio >= SIMILAR_RATIO else -1
+
+
+def _caption_candidates(ns: list[str], label: str, cursor: int, last: int) -> list[int]:
+    """表题行候选：``表X.Y …`` 形式、短行、出现在游标附近或命中区间内。"""
+    key = "".join(label.split())
+    if not key:
+        return []
+    lo = max(0, cursor - 2)
+    hi = min(len(ns), max(last + 10, cursor + 10))
+    return [
+        k
+        for k in range(lo, hi)
+        if key in ns[k] and len(ns[k]) < 80 and RE_CAPTION.match(ns[k])
+    ]
 
 
 def _align_table(
@@ -159,59 +204,83 @@ def _align_table(
     if not rows:
         return None, "miss"
 
-    start = max(0, cursor - 2)
-    j = start
-    first: int | None = None
-    last: int | None = None
-    limit = len(ns)
-    for row in rows:
-        variants = row_variants(row)
-        if not variants:
-            continue
-        hit = -1
-        for nr in variants:
-            for k in range(j, limit):
-                if npipe[k] is None:
-                    npipe[k] = norm_pipe(raw_lines[k])
-                ok = npipe[k] == nr
-                if not ok and len(nr) >= 6:
-                    ok = nr in (npipe[k] or "")
-                if ok:
-                    hit = k
-                    break
-            if hit >= 0:
-                break
-        if hit < 0:
-            # 兜底：按单元格顺序匹配（rowspan/colspan 会让拼接串对不上整张表）
-            cells = _cells(row)
-            if cells:
-                for k in range(j, min(limit, j + 400)):
-                    if _row_in_line(cells, ns[k]):
+    def match_rows(start: int, stop: int) -> tuple[int | None, int | None, int]:
+        j = start
+        first: int | None = None
+        last: int | None = None
+        matched = 0
+        for row in rows:
+            variants = row_variants(row)
+            if not variants:
+                continue
+            hit = -1
+            for nr in variants:
+                for k in range(j, stop):
+                    if npipe[k] is None:
+                        npipe[k] = norm_pipe(raw_lines[k])
+                    ok = npipe[k] == nr
+                    if not ok and len(nr) >= 6:
+                        ok = nr in (npipe[k] or "")
+                    if ok:
                         hit = k
                         break
-        if hit >= 0:
-            if first is None:
-                first = hit
-            last = hit
-            # 超长单行（整张 HTML 表）允许后续行继续命中同一行
-            j = hit if len(raw_lines[hit]) >= HUGE_LINE_CHARS else hit + 1
+                if hit >= 0:
+                    break
+            if hit < 0:
+                # 兜底：按单元格顺序匹配（rowspan/colspan 会让拼接串对不上整张表）
+                cells = _cells(row)
+                if cells:
+                    for k in range(j, min(stop, j + 400)):
+                        if _row_in_line(cells, ns[k]):
+                            hit = k
+                            break
+            if hit >= 0:
+                matched += 1
+                if first is None:
+                    first = hit
+                last = hit
+                # 整张表压成一行的源行（HTML 单行 / 超长膨胀行）可被多行复用
+                j = hit if _is_table_line(raw_lines[hit]) else hit + 1
+        return first, last, matched
 
+    first, last, matched = match_rows(max(0, cursor - 2), len(ns))
     if first is None or last is None:
         return None, "miss"
 
-    span = [first, last + 1]
     label = str((extras or {}).get("table_label") or "")
     title = str((extras or {}).get("table_title") or "")
-    # 往上把表号/表题带进来（最多 6 行，且不越过上一块终点）
-    for b in range(first - 1, max(cursor - 1, first - 7), -1):
-        if b < 0:
-            break
-        line = ns[b]
-        if (label and label.replace(" ", "") in line) or (title and title[:6] in line) or (
-            line.startswith("表") and len(line) < 80
-        ):
-            span[0] = b
-            break
+    anchored_at: int | None = None
+
+    # 行命中跨了不止一条「整表行」，或行数没配齐：用表题窗口整表重匹配
+    # （同两张表前几行内容完全相同时，避免把后一张表的行算到前一张表上）
+    if label and (last > first or matched < len(rows)):
+        for cap in _caption_candidates(ns, label, cursor, last):
+            stop = len(ns)
+            for k in range(cap + 1, len(ns)):
+                if RE_CAPTION.match(ns[k]):
+                    stop = k
+                    break
+            f2, l2, m2 = match_rows(cap + 1, stop)
+            if f2 is not None and l2 is not None and m2 == len(rows):
+                first, last = f2, l2
+                anchored_at = cap
+                break
+
+    span = [first, last + 1]
+    if anchored_at is not None:
+        # 锚定到表题行：span 从表题开始，让原文高亮包含表题
+        span[0] = anchored_at
+    else:
+        # 往上把表号/表题带进来（最多 6 行，且不越过上一块终点）
+        for b in range(first - 1, max(cursor - 1, first - 7), -1):
+            if b < 0:
+                break
+            line = ns[b]
+            if (label and label.replace(" ", "") in line) or (title and title[:6] in line) or (
+                line.startswith("表") and len(line) < 80
+            ):
+                span[0] = b
+                break
     return span, "table_rows"
 
 

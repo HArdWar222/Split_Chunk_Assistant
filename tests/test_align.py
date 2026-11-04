@@ -62,6 +62,16 @@ class ScanTest(unittest.TestCase):
     def test_scan_miss(self):
         self.assertEqual(_scan(["正文"], "不存在", 0), -1)
 
+    def test_scan_similarity_fallback_for_superscript(self):
+        # 源文里的 m<sup>2</sup> 清洗后会多出一个 2，chunk 正文里没有 → 精确/子串都失败
+        # （_scan 的入参是 norm_line 之后的字符串，与 align_chunks 内部一致；
+        #   真实语料里这类行相似度约 0.98，高于 SIMILAR_RATIO=0.93）
+        lines = [
+            norm_line("5.2.3 安全出口不应少于 2个，建筑面积不大于 200m<sup>2</sup> 且人数不大于 50 人的单层小购物场所。"),
+        ]
+        target = norm_line("5.2.3 安全出口不应少于 2个，建筑面积不大于 200m 且人数不大于 50 人的单层小购物场所。")
+        self.assertEqual(_scan(lines, target, 0), 0)
+
 
 class AlignClauseTest(unittest.TestCase):
     SOURCE = [
@@ -154,6 +164,70 @@ class AlignTableTest(unittest.TestCase):
         aligned = align_chunks(chunks, source, extras)
         self.assertEqual(aligned[0]["span"], [1, 2])
         self.assertEqual(aligned[0]["status"], "table_label")
+
+    def test_single_line_table_below_huge_threshold_reuses_line(self):
+        # 整张表压成一行但不足 HUGE_LINE_CHARS(2000)：多行仍应复用同一源行
+        table = (
+            "<table><tr><td>序号</td><td>名称</td></tr>"
+            "<tr><td>1</td><td>甲</td></tr>"
+            "<tr><td>2</td><td>乙</td></tr></table>"
+        )
+        source = ["# 标准", "表A.1 测试表", table]
+        chunks = [{"id": "c1", "chunk": "1 甲\n2 乙", "chunk_kind": "table"}]
+        extras = {
+            "c1": {
+                "table_label": "表A.1",
+                "table_title": "测试表",
+                "table_grid": {
+                    "headers": ["序号", "名称"],
+                    "rows": [["1", "甲"], ["2", "乙"]],
+                    "header_rows": 1,
+                    "width": 2,
+                },
+            }
+        }
+        aligned = align_chunks(chunks, source, extras)
+        self.assertEqual(aligned[0]["status"], "table_rows")
+        self.assertEqual(aligned[0]["span"][1], 3)  # 表行是索引 2，span 右端 = 3
+        self.assertGreaterEqual(aligned[0]["span"][0], 1)  # 允许把表题带进来
+
+    def test_two_tables_same_first_rows_anchor_to_own_caption(self):
+        # 两张表前几行内容完全相同（真实语料里的表C.1/表C.2）：
+        # 后一张表的切片不能命中前一张表
+        table1 = (
+            "<table><tr><td>10</td><td>00</td></tr><tr><td>11</td><td>01</td></tr>"
+            "<tr><td>12</td><td>02</td></tr></table>"
+        )
+        table2 = (
+            "<table><tr><td>10</td><td>00</td></tr><tr><td>20</td><td>03</td></tr></table>"
+        )
+        source = [
+            "# 附录 C",
+            "表C.1 第一张表",
+            table1,
+            "",
+            "表C.2 第二张表",
+            table2,
+        ]
+        chunks = [
+            {"id": "c1", "chunk": "10 00\n20 03", "chunk_kind": "table"},
+        ]
+        extras = {
+            "c1": {
+                "table_label": "表C.2",
+                "table_title": "第二张表",
+                "table_grid": {
+                    "headers": [],
+                    "rows": [["10", "00"], ["20", "03"]],
+                    "header_rows": 0,
+                    "width": 2,
+                },
+            }
+        }
+        aligned = align_chunks(chunks, source, extras)
+        self.assertEqual(aligned[0]["status"], "table_rows")
+        self.assertGreaterEqual(aligned[0]["span"][0], 4)  # 至少从表C.2 表题行开始
+        self.assertEqual(aligned[0]["span"][1], 6)  # 表C.2 的表行是索引 5
 
 
 class SummarizeTest(unittest.TestCase):
