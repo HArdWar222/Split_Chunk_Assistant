@@ -423,6 +423,85 @@ class StandardClauseNumTest(unittest.TestCase):
         self.assertEqual(out[-1]["law_num"], "5.4.1")  # 跳过表号，取最近的「5.4.1」
 
 
+class ExtendTest(unittest.TestCase):
+    def test_extend_merges_into_target_keeping_id(self):
+        chunks = base_chunks()
+        body = chunks[0]["chunk"] + "\n" + chunks[1]["chunk"] + "\n多选出来的尾巴行"
+        out = apply_ops(
+            chunks,
+            [
+                {
+                    "op": "extend",
+                    "id": "测试法-0001",
+                    "ids": ["测试法-0001", "测试法-0002"],
+                    "chunk": body,
+                    "span": [3, 6],
+                }
+            ],
+            law_name=LAW,
+        )
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["id"], "测试法-0001")
+        self.assertEqual(out[0]["chunk"], body)
+        self.assertEqual(out[0]["law_num"], "第一条")
+        self.assertEqual(out[0]["span"], [3, 6])
+        self.assertTrue(out[0]["manual"])
+        # 后面的附录块按位置重排 id 顺延
+        self.assertEqual(out[1]["id"], "测试法-0002")
+        self.assertEqual(out[1]["chunk_kind"], "appendix")
+
+    def test_extend_without_chunk_concatenates(self):
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "extend", "id": "测试法-0001", "ids": ["测试法-0001", "测试法-0002"]}],
+            law_name=LAW,
+        )
+        self.assertIn("第二条 测试结束。", out[0]["chunk"])
+        self.assertEqual(out[0]["span"], [3, 6])
+        self.assertEqual(out[0]["align"], "manual")
+
+    def test_extend_errors(self):
+        chunks = base_chunks()
+        with self.assertRaises(OpError):
+            apply_ops(chunks, [{"op": "extend", "ids": ["测试法-0001"]}], law_name=LAW)
+        with self.assertRaises(OpError):
+            apply_ops(
+                chunks,
+                [{"op": "extend", "id": "测试法-0002", "ids": ["测试法-0001", "测试法-0002"]}],
+                law_name=LAW,
+            )
+        with self.assertRaises(OpError):
+            apply_ops(
+                chunks,
+                [{"op": "extend", "id": "测试法-0001", "ids": ["测试法-0001", "测试法-0003"]}],
+                law_name=LAW,
+            )
+        with self.assertRaises(OpError):
+            apply_ops(
+                chunks,
+                [{"op": "extend", "id": "测试法-0001", "ids": ["测试法-0001"], "chunk": "   "}],
+                law_name=LAW,
+            )
+        with self.assertRaises(OpError):
+            apply_ops(
+                chunks,
+                [{"op": "extend", "id": "测试法-0001", "ids": ["测试法-0001"], "law_num": ""}],
+                law_name=LAW,
+            )
+
+    def test_extend_diff(self):
+        chunks = base_chunks()
+        out = apply_ops(
+            chunks,
+            [{"op": "extend", "id": "测试法-0001", "ids": ["测试法-0001", "测试法-0002"]}],
+            law_name=LAW,
+        )
+        diff = chunk_diff(chunks, out)
+        self.assertEqual(diff["removed"], 1)
+        self.assertEqual(diff["added"], 0)
+        self.assertEqual(diff["modified"], 1)
+
+
 class ApplyAndDiffTest(unittest.TestCase):
     def test_input_not_mutated(self):
         chunks = base_chunks()

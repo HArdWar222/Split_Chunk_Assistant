@@ -468,6 +468,11 @@ body.no-lanes .line .lanes { display: none; }
 
 .field input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-weak); }
 
+/* 设置面板里「勾选 + 说明」同一行 */
+.field.inline-field { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.field.inline-field > span { margin-bottom: 0; flex: 1; }
+.field.inline-field input[type="checkbox"] { width: auto; flex: none; transform: scale(1.15); cursor: pointer; }
+
 .source-roots { display: grid; gap: 8px; }
 .source-row { display: grid; grid-template-columns: 150px 1fr; gap: 8px; align-items: center; }
 .source-row label { font-family: var(--mono); font-size: 12px; color: var(--muted); }

@@ -64,6 +64,10 @@ class Config:
     data_root: str = ""
     source_roots: dict[str, str] = field(default_factory=dict)
     port: int = DEFAULT_PORT
+    # 编辑后自动分 part（文本按字符均分；表格只按行区间拆独立块）
+    auto_part: bool = False
+    max_chars: int = 800
+    min_part_chars: int = 200
 
     def __post_init__(self) -> None:
         if not self.fac_root:
@@ -80,6 +84,12 @@ class Config:
             self.port = int(self.port)
         except (TypeError, ValueError):
             raise ConfigError(f"端口必须是整数：{self.port!r}") from None
+        self.auto_part = bool(self.auto_part)
+        try:
+            self.max_chars = int(self.max_chars)
+            self.min_part_chars = int(self.min_part_chars)
+        except (TypeError, ValueError):
+            raise ConfigError("max_chars / min_part_chars 必须是整数") from None
 
     # -- 序列化 ---------------------------------------------------------
     def to_dict(self) -> dict:
@@ -89,6 +99,9 @@ class Config:
             "data_root": self.data_root,
             "source_roots": dict(self.source_roots),
             "port": self.port,
+            "auto_part": self.auto_part,
+            "max_chars": self.max_chars,
+            "min_part_chars": self.min_part_chars,
         }
 
     @classmethod
@@ -100,6 +113,9 @@ class Config:
             data_root=str(data.get("data_root") or ""),
             source_roots=dict(data.get("source_roots") or {}),
             port=data.get("port", DEFAULT_PORT),
+            auto_part=bool(data.get("auto_part", False)),
+            max_chars=data.get("max_chars", 800),
+            min_part_chars=data.get("min_part_chars", 200),
         )
 
     # -- 加载 / 保存 ----------------------------------------------------
@@ -153,6 +169,9 @@ class Config:
             data_root=_clean_path(data_root),
             source_roots=dict(source_roots or {}),
             port=port,
+            auto_part=patch.get("auto_part", self.auto_part),
+            max_chars=patch.get("max_chars", self.max_chars),
+            min_part_chars=patch.get("min_part_chars", self.min_part_chars),
         )
 
     # -- 校验 -----------------------------------------------------------
@@ -197,6 +216,12 @@ class Config:
                 errors.append(f"源目录不存在（{group}）：{root}")
         if not (0 < self.port < 65536):
             errors.append(f"端口超出范围 1–65535：{self.port}")
+        if self.max_chars < 200:
+            errors.append(f"max_chars 太小（至少 200）：{self.max_chars}")
+        if not (0 < self.min_part_chars <= self.max_chars):
+            errors.append(
+                f"min_part_chars 必须在 1–max_chars 之间：{self.min_part_chars}"
+            )
         return errors
 
     def require_valid(self) -> None:

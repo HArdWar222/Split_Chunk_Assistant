@@ -397,6 +397,62 @@ def _merge_many(chunks: list[dict], op: dict, law_name: str, reserved=None, sour
     return chunks[:start] + [merged] + chunks[end + 1 :]
 
 
+def _extend(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
+    """把选区覆盖的连续块并入目标块（保留目标 id），可选覆盖正文/条号。
+
+    形状：``{"op": "extend", "id": 目标, "ids": [目标, …后续块], "chunk": 可选新正文, "law_num": 可选}``。
+    行级语义：调用方（前端）必须把选区吸附到块边界——中间块整块并入，不做半块切分。
+    """
+    ids = [str(cid) for cid in (op.get("ids") or []) if str(cid or "").strip()]
+    target_id = str(op.get("id") or "").strip()
+    if not target_id:
+        raise OpError("extend 需要 id（目标块）")
+    if not ids:
+        ids = [target_id]
+    if ids[0] != target_id:
+        raise OpError("extend 的 ids[0] 必须是目标块 id")
+    if len(set(ids)) != len(ids):
+        raise OpError("extend 的 ids 里有重复项")
+
+    indexes = [find_index(chunks, cid) for cid in ids]
+    if indexes != list(range(indexes[0], indexes[0] + len(indexes))):
+        raise OpError("extend 只能合并连续的切片（选中的块之间不能跳块）")
+
+    group = chunks[indexes[0] : indexes[-1] + 1]
+    merged = _copy(group[0])
+    if "chunk" in op:
+        text = str(op.get("chunk") or "")
+    else:
+        text = "\n".join(str(chunk.get("chunk") or "") for chunk in group)
+    _derive(merged, text=text)
+    _require_text(merged, "扩展")
+
+    if "law_num" in op:
+        law_num = str(op.get("law_num") or "").strip()
+        if not law_num:
+            raise OpError("law_num 不能为空")
+        merged["law_num"] = law_num
+    elif not str(merged.get("law_num") or "").strip():
+        for chunk in group[1:]:
+            if str(chunk.get("law_num") or "").strip():
+                merged["law_num"] = chunk["law_num"]
+                break
+
+    span = _parse_span(op.get("span"))
+    spans = [chunk.get("span") for chunk in group]
+    merged["manual"] = True
+    merged["align"] = "manual"
+    if span:
+        merged["span"] = span
+    elif all(item and len(item) == 2 for item in spans):
+        merged["span"] = [min(int(item[0]) for item in spans), max(int(item[1]) for item in spans)]
+    else:
+        merged["span"] = None
+
+    out = chunks[: indexes[0]] + [merged] + chunks[indexes[-1] + 1 :]
+    return _renumber(out, law_name)
+
+
 def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     return chunks[:index] + chunks[index + 1 :]
@@ -524,6 +580,7 @@ HANDLERS = {
     "split": _split,
     "merge": _merge,
     "merge_many": _merge_many,
+    "extend": _extend,
     "drop": _drop,
     "add": _add,
     "patch": _patch,

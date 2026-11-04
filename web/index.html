@@ -1,10 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.24-p2x">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.25-p2y">
 </head>
 <body>
   <header class="topbar">
@@ -101,6 +101,21 @@
         <input id="cfg-port" type="number" min="1" max="65535">
       </label>
 
+      <label class="field inline-field">
+        <span>自动分 part <code>auto_part</code>（超过阈值的切片在加载时自动拆分；表格只按行区间拆）</span>
+        <input id="cfg-auto-part" type="checkbox">
+      </label>
+
+      <label class="field">
+        <span>自动拆分阈值 <code>max_chars</code>（默认 800，≥200）</span>
+        <input id="cfg-max-chars" type="number" min="200" step="50">
+      </label>
+
+      <label class="field">
+        <span>最小 part 长度 <code>min_part_chars</code>（默认 200，仅文本 part 用）</span>
+        <input id="cfg-min-part-chars" type="number" min="1">
+      </label>
+
       <div class="field">
         <span>源文件根目录 <code>source_roots</code>（按分组，留空自动从 manifest 推导）</span>
         <div id="cfg-source-roots" class="source-roots"></div>
@@ -165,8 +180,8 @@
 
   <dialog id="add-dialog" class="dialog op-dialog">
     <form method="dialog" id="add-form">
-      <h2>＋ 新增切片</h2>
-      <p class="hint">在原文里拖选一段文字后点「新增」，选区会直接变成切片并记录行区间；未选区时手动输入正文，插入到当前选中切片之后（未选中则追加末尾），id = 当前最大 seq+1。</p>
+      <h2 id="add-title">＋ 新增切片</h2>
+      <p class="hint" id="add-desc">在原文里拖选一段文字后点「新增」，选区会直接变成切片并记录行区间；未选区时手动输入正文，插入到当前选中切片之后（未选中则追加末尾），id = 当前最大 seq+1。</p>
       <p class="op-hint" id="add-hint" hidden></p>
       <label class="field">
         <span>正文 <code>chunk</code></span>
@@ -193,6 +208,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.24-p2x" defer></script>
+  <script src="/static/app.js?v=0.3.25-p2y" defer></script>
 </body>
 </html>

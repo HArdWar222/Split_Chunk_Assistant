@@ -74,18 +74,24 @@
     editKind: document.getElementById("edit-kind"),
     editErrors: document.getElementById("edit-errors"),
     addDialog: document.getElementById("add-dialog"),
+    addTitle: document.getElementById("add-title"),
+    addDesc: document.getElementById("add-desc"),
     addHint: document.getElementById("add-hint"),
     addForm: document.getElementById("add-form"),
     addText: document.getElementById("add-text"),
     addLawNum: document.getElementById("add-law-num"),
     addKind: document.getElementById("add-kind"),
     addErrors: document.getElementById("add-errors"),
+    btnAddOk: document.getElementById("btn-add-ok"),
     dialog: document.getElementById("settings-dialog"),
     form: document.getElementById("settings-form"),
     chunksDir: document.getElementById("cfg-chunks-dir"),
     facRoot: document.getElementById("cfg-fac-root"),
     dataRoot: document.getElementById("cfg-data-root"),
     port: document.getElementById("cfg-port"),
+    autoPart: document.getElementById("cfg-auto-part"),
+    maxChars: document.getElementById("cfg-max-chars"),
+    minPartChars: document.getElementById("cfg-min-part-chars"),
     sourceRoots: document.getElementById("cfg-source-roots"),
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
@@ -614,7 +620,7 @@
   function loadFiles() {
     setStatus("加载文件清单…");
     el.tree.innerHTML = "";
-    getJSON("/api/files").then(function (data) {
+    return getJSON("/api/files").then(function (data) {
       state.data = data;
       state.config = data.config || state.config;
       renderStats(data);
@@ -1467,7 +1473,7 @@
       parts.push((lines[b - 1].text || "").slice(0, endOff));
     }
     var text = parts.join("\n");
-    return { start: a, end: b, text: text };
+    return { start: a, end: b, text: text, startOffset: startOff };
   }
 
   function chunksInLineRange(start, end) {
@@ -2795,6 +2801,171 @@
     return [chunk.chunk || "", chunk.law_num || "", chunk.chunk_kind || ""].join("\u0001");
   }
 
+  // ---------- 扩展切片（从块首选到块外 → 把越过的块并入目标块） ----------
+  // 行级语义：文字选区必须从目标块的首行开始（行首偏移 0），表格行选区必须从目标块行区间
+  // 的首行开始；越过的块整块并入，不做半块切分。边界不满足时退回「新增」。
+  function chunkDisplayNo(chunk) {
+    if (!state.doc || !chunk) return "?";
+    var i = state.doc.chunks.indexOf(chunk);
+    return i >= 0 ? i + 1 : "?";
+  }
+
+  // 扩展判定用的行区间解析（顶层作用域；渲染层里的 tableRowRange 是局部函数）
+  var EXTEND_ROW_RE = /第\s*(\d+)\s*[-–—~～]\s*(\d+)\s*行/;
+
+  function extendRowRange(chunk) {
+    var kind = chunk && chunk.chunk_kind;
+    if (kind !== "table" && kind !== "appendix") return null;
+    var m = EXTEND_ROW_RE.exec(chunk.law_num || "");
+    if (!m) return null;
+    var a = parseInt(m[1], 10);
+    var b = parseInt(m[2], 10);
+    if (!isFinite(a) || !isFinite(b) || a < 1 || b < a) return null;
+    return { start: a, end: b };
+  }
+
+  function extendPlan(picked) {
+    if (!state.doc || !picked) return null;
+    var chunks = state.doc.chunks || [];
+    // 表格行选区：首行 == 某块「第X-Y行」的起点，且末行超过该块行区间
+    var rowPickSel = (picked.rows && picked.rows.length) || (picked.tableRowsArr && picked.tableRowsArr.length);
+    if (rowPickSel) {
+      var trRows = picked.tableRowsArr || picked.rows || [];
+      var from = parseInt(trRows[0] && trRows[0].dataset ? trRows[0].dataset.rowno : "", 10);
+      var to = parseInt(trRows[trRows.length - 1] && trRows[trRows.length - 1].dataset ? trRows[trRows.length - 1].dataset.rowno : "", 10);
+      if (!isFinite(from) && typeof picked.from === "number") from = picked.from;
+      if (!isFinite(to) && typeof picked.to === "number") to = picked.to;
+      if (!isFinite(from) && Array.isArray(picked.tableRows)) from = picked.tableRows[0];
+      if (!isFinite(to) && Array.isArray(picked.tableRows)) to = picked.tableRows[1];
+      if (!isFinite(from) || !isFinite(to) || !(to > from)) return null;
+      // 不同表格的行号各自从 1 开始，必须限定在同一个表格块里找目标
+      var blockEl = picked.blockEl || (trRows[0] && trRows[0].closest ? trRows[0].closest(".line.table-block") : null);
+      if (!blockEl && picked.block && picked.block.el) blockEl = picked.block.el;
+      var blockLine = blockEl ? parseInt(blockEl.dataset.line, 10) : NaN;
+      var target = null;
+      chunks.forEach(function (c) {
+        if (target) return;
+        if (!isFinite(blockLine)) return;
+        if (!c.span || c.span[0] !== blockLine) return;
+        var r = extendRowRange(c);
+        if (r && r.start === from) target = c;
+      });
+      if (!target) return null;
+      var tr = extendRowRange(target);
+      if (!tr || to <= tr.end) return null;
+      var picked2 = [];
+      chunks.forEach(function (c) {
+        if (!isFinite(blockLine) || !c.span || c.span[0] !== blockLine) return;
+        var r = extendRowRange(c);
+        if (!r) return;
+        if (r.start >= from && r.end <= to) picked2.push({ chunk: c, range: r });
+      });
+      picked2.sort(function (x, y) { return x.range.start - y.range.start; });
+      if (!picked2.length || picked2[0].chunk.id !== target.id) return null;
+      var coveredEnd = from - 1;
+      var ids = [];
+      for (var i = 0; i < picked2.length; i++) {
+        var item = picked2[i];
+        if (item.range.start > coveredEnd + 1) break; // 中间还有块没被选中/断档
+        ids.push(item.chunk.id);
+        coveredEnd = Math.max(coveredEnd, item.range.end);
+        if (coveredEnd >= to) break;
+      }
+      if (ids[0] !== target.id || ids.length < 2) return null;
+      if (coveredEnd < to) return null;
+      return { kind: "table", target: target, ids: ids, from: from, to: to, blockEl: (trRows[0] && trRows[0].closest ? trRows[0].closest(".line.table-block") : null) };
+    }
+    // 文字选区：起点在目标块首行行首，终点超过目标块末行
+    if (typeof picked.start !== "number" || typeof picked.end !== "number") return null;
+    if (picked.startOffset !== 0) return null;
+    var target2 = null;
+    chunks.forEach(function (c) {
+      if (!target2 && c.span && c.span[0] === picked.start) target2 = c;
+    });
+    if (!target2 || !target2.span) return null;
+    if (picked.end < target2.span[1]) return null;
+    // 选区必须真的越过目标块（至少扩到下一行/下一块）
+    if (picked.end === target2.span[1] && !hasChunkStartingWithin(chunks, target2, picked.end)) return null;
+    var ids2 = [target2.id];
+    var covered = target2.span[1];
+    var ordered = chunks.slice().sort(function (x, y) {
+      return (x.span ? x.span[0] : 1e9) - (y.span ? y.span[0] : 1e9);
+    });
+    ordered.forEach(function (c2) {
+      if (c2 === target2 || !c2.span) return;
+      if (c2.span[0] <= covered) return; // 已被覆盖（重叠块不并入）
+      if (c2.span[0] > picked.end) return; // 起点在选区之外
+      ids2.push(c2.id);
+      covered = Math.max(covered, c2.span[1]);
+    });
+    if (ids2.length < 2 && picked.end <= target2.span[1]) return null;
+    return { kind: "text", target: target2, ids: ids2, from: picked.start, to: Math.max(picked.end, covered) };
+  }
+
+  function hasChunkStartingWithin(chunks, target, end) {
+    for (var i = 0; i < chunks.length; i++) {
+      var c = chunks[i];
+      if (c === target || !c.span) continue;
+      if (c.span[0] > (target.span ? target.span[0] : 0) && c.span[0] <= end) return true;
+    }
+    return false;
+  }
+
+  function extendBody(plan) {
+    if (!plan) return "";
+    if (plan.kind === "text") {
+      var lines = state.doc.lines || [];
+      var out = [];
+      for (var i = plan.from; i <= plan.to; i++) {
+        out.push(lines[i - 1] ? (lines[i - 1].text || "") : "");
+      }
+      return out.join("\n");
+    }
+    // 表格：按选中行顺序拼接各块正文（面包屑首行去重）
+    var bodyLines = [];
+    var seenFirst = {};
+    plan.ids.forEach(function (id) {
+      var chunk = findChunk(id);
+      if (!chunk) return;
+      var parts = String(chunk.chunk || "").split("\n");
+      parts.forEach(function (line, idx) {
+        if (idx === 0) {
+          if (seenFirst[line]) return;
+          seenFirst[line] = 1;
+        }
+        bodyLines.push(line);
+      });
+    });
+    // 末块行区间之后、选区末尾之前的行（缺口行或跨块行）用渲染出的 tr 文本补上
+    var last = findChunk(plan.ids[plan.ids.length - 1]);
+    var lastRange = last ? extendRowRange(last) : null;
+    var startGap = lastRange ? lastRange.end + 1 : plan.from;
+    if (startGap <= plan.to) {
+      var block = plan.blockEl || (plan.target.span ? tableBlockAt(plan.target.span[0]) : null);
+      var trs = block && block.el ? tableRowsOf(block.el) : [];
+      trs.forEach(function (trEl) {
+        var rn = parseInt(trEl.dataset.rowno, 10);
+        if (!isFinite(rn) || rn < startGap || rn > plan.to) return;
+        var cells = Array.prototype.map.call(trEl.cells, function (td) {
+          return (td.textContent || "").replace(/\s+/g, " ").trim();
+        }).filter(function (v) { return v; });
+        if (cells.length) bodyLines.push(cells.join(" · "));
+      });
+    }
+    return bodyLines.join("\n");
+  }
+
+  function extendLawNum(plan) {
+    if (!plan) return "";
+    var lawNum = String(plan.target.law_num || "").trim();
+    if (plan.kind !== "table") return lawNum;
+    var range = extendRowRange(plan.target);
+    if (range) {
+      return lawNum.replace(EXTEND_ROW_RE, "第" + plan.from + "-" + plan.to + "行");
+    }
+    return (lawNum ? lawNum + " " : "") + "第" + plan.from + "-" + plan.to + "行";
+  }
+
   function openAdd(picked) {
     if (!state.doc) { showToast("先打开一个文件", "warn"); return; }
     state.opErrEl = el.addErrors;
@@ -2802,7 +2973,38 @@
     el.addErrors.textContent = "";
 
     // 如果原文里有选区（或右键菜单带入了选区）：把选区文本带进弹层，并记下行区间
-    if (!picked || typeof picked.start !== "number") picked = selectedText();
+    if (!picked || (typeof picked.start !== "number" && !(picked.rows && picked.rows.length))) picked = selectedText();
+    state.addMode = "add";
+    state.extendPlan = null;
+    el.addTitle.textContent = "＋ 新增切片";
+    el.addDesc.textContent = "在原文里拖选一段文字后点「新增」，选区会直接变成切片并记录行区间；未选区时手动输入正文，插入到当前选中切片之后（未选中则追加末尾），id = 当前最大 seq+1。";
+    el.btnAddOk.textContent = "新增";
+
+    // 从目标块首行选到块外 → 不新增，改为扩展目标块（把越过的块并进来）
+    var plan = extendPlan(picked);
+    if (plan) {
+      state.addMode = "extend";
+      state.extendPlan = plan;
+      state.addBeforeId = null;
+      state.addAfterId = plan.target.id;
+      state.addSpan = null;
+      el.addTitle.textContent = "⤢ 扩展切片";
+      el.addDesc.textContent = "选区从 #" + chunkDisplayNo(plan.target) + " 的起点开始、越过了块边界：提交后会在原切片上扩展（并入被越过的块），不新增一块；Ctrl+Z 一次撤销。";
+      el.btnAddOk.textContent = "扩展";
+      el.addText.value = extendBody(plan);
+      el.addLawNum.value = extendLawNum(plan);
+      fillKind(el.addKind, plan.target.chunk_kind || "paragraph");
+      el.addHint.hidden = false;
+      if (plan.kind === "table") {
+        el.addHint.textContent = "将扩展 #" + chunkDisplayNo(plan.target) + "：「表格内第 " + plan.from +
+          "–" + plan.to + " 行」并合并中间 " + (plan.ids.length - 1) + " 块（正文按行重建，行区间写入 law_num）。";
+      } else {
+        el.addHint.textContent = "将扩展 #" + chunkDisplayNo(plan.target) + "：「原文第 " + plan.from +
+          "–" + plan.to + " 行」并合并中间 " + (plan.ids.length - 1) + " 块（正文取这几行原文）。";
+      }
+      el.addDialog.showModal();
+      return;
+    }
     state.addBeforeId = null;
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
@@ -2880,6 +3082,10 @@
     ev.preventDefault();
     var text = el.addText.value;
     if (!text.trim()) { opFailed({ message: "正文不能为空" }, el.addErrors); return; }
+    if (state.addMode === "extend" && state.extendPlan) {
+      submitExtend(text);
+      return;
+    }
     var op = {
       op: "add",
       text: text,
@@ -2916,6 +3122,33 @@
     });
   }
 
+  function submitExtend(text) {
+    var plan = state.extendPlan;
+    var targetId = plan.target.id;
+    var op = { op: "extend", id: targetId, ids: plan.ids.slice(), chunk: text };
+    var lawNum = el.addLawNum.value.trim();
+    if (lawNum) op.law_num = lawNum;
+    if (plan.kind === "text") op.span = [plan.from, plan.to];
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      el.addDialog.close();
+      state.addMode = "add";
+      state.extendPlan = null;
+      state.addSpan = null;
+      state.addBeforeId = null;
+      state.addAfterId = null;
+      applyDocPayload(doc);
+      var chunk = findChunk(targetId);
+      if (chunk) {
+        selectChunk(chunk, { scrollSource: true, scrollCard: true });
+        showToast("已扩展 #" + chunkDisplayNo(chunk) + "（Ctrl+Z 可撤销）", "ok");
+      } else {
+        showToast("已扩展切片（Ctrl+Z 可撤销）", "ok");
+      }
+    }).catch(function (err) {
+      opFailed(err, el.addErrors);
+    });
+  }
+
   // ---------- 设置 ----------
   function openSettings() {
     var cfg = (state.data && state.data.ok !== false) ? (state.data.config || state.config) : (state.config || {});
@@ -2925,6 +3158,9 @@
     el.facRoot.value = cfg.fac_root || "";
     el.dataRoot.value = cfg.data_root || "";
     el.port.value = cfg.port || 8790;
+    if (el.autoPart) el.autoPart.checked = !!cfg.auto_part;
+    if (el.maxChars) el.maxChars.value = cfg.max_chars || 800;
+    if (el.minPartChars) el.minPartChars.value = cfg.min_part_chars || 200;
     renderSourceRoots(cfg);
     el.cfgErrors.hidden = true;
     el.cfgErrors.textContent = "";
@@ -2974,6 +3210,9 @@
       fac_root: el.facRoot.value.trim(),
       data_root: el.dataRoot.value.trim(),
       port: parseInt(el.port.value, 10) || 8790,
+      auto_part: !!(el.autoPart && el.autoPart.checked),
+      max_chars: parseInt(el.maxChars && el.maxChars.value, 10) || 800,
+      min_part_chars: parseInt(el.minPartChars && el.minPartChars.value, 10) || 200,
       source_roots: sourceRoots
     };
   }
@@ -2988,7 +3227,9 @@
       state.config = body.config;
       el.dialog.close();
       showToast(body.message || "配置已保存", "ok");
-      loadFiles();
+      var keepKey = state.docKey || keyFromHash();
+      // 自动分 part / 阈值变化要立刻在当前文档上生效：文件清单刷新后再载入当前文件
+      loadFiles().then(function () { if (keepKey) selectByKey(keepKey); });
     }).catch(function (err) {
       el.cfgErrors.hidden = false;
       el.cfgErrors.textContent = err.message;
@@ -3061,7 +3302,11 @@
     el.btnUndo.addEventListener("click", doUndo);
     el.btnRedo.addEventListener("click", doRedo);
     el.btnReset.addEventListener("click", doReset);
-    el.btnAdd.addEventListener("click", openAdd);
+    el.btnAdd.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    var picked = selectedTableRows();
+    openAdd(picked || undefined);
+  });
     // 点「新增」按钮时不抢焦点/不清掉原文选区
     el.btnAdd.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
     el.splitForm.addEventListener("submit", submitSplit);
@@ -3130,8 +3375,9 @@
       var inTable = ev.target && ev.target.closest && ev.target.closest(".line.table-block");
       if (!el.ctxMenu.hidden && !inMenu) hideCtxMenu();
       if (el.source && !el.source.contains(ev.target)) hideSplitCaret();
-      // 行选区只属于当前表格：点到别处（菜单/对话框除外）即收起
-      if (!inMenu && !inTable && state.rowPick) hideRowPick();
+      // 行选区只属于当前表格：点到别处（菜单/对话框/按钮除外）即收起
+      var keepPick = ev.target && ev.target.closest && ev.target.closest("button, dialog, #chunks, .toolbar");
+      if (!inMenu && !inTable && !keepPick && state.rowPick) hideRowPick();
     });
     el.source.addEventListener("scroll", function () {
       if (!programmaticScrollNow()) hideCtxMenu();

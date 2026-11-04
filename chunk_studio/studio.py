@@ -15,6 +15,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from .align import align_chunks, summarize_align
+from .autopart import auto_part_chunks
 from .config import Config, ConfigError
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, Manifest, ManifestError
@@ -213,6 +214,9 @@ class Studio:
             "default_source_roots": dict(self._default_roots),
             "groups": list(self._default_roots.keys()),
             "port": self.cfg.port,
+            "auto_part": self.cfg.auto_part,
+            "max_chars": self.cfg.max_chars,
+            "min_part_chars": self.cfg.min_part_chars,
             "errors": self.cfg.validate(),
             "manifest_ok": self._bridge is not None,
             "manifest_error": self._error,
@@ -367,6 +371,13 @@ class Studio:
             )
         else:
             chunks = base["chunks"]
+        if self.cfg.auto_part:
+            chunks = auto_part_chunks(
+                chunks,
+                base["law_name"],
+                self.cfg.max_chars,
+                self.cfg.min_part_chars,
+            )
         payload = dict(base)
         payload.pop("_raw_lines", None)
         payload["chunks"] = chunks
