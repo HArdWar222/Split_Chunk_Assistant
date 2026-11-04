@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.21-p2u">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.22-p2v">
 </head>
 <body>
   <header class="topbar">
@@ -78,7 +78,8 @@
   <dialog id="settings-dialog" class="dialog">
     <form method="dialog" id="settings-form">
       <h2>⚙ 设置</h2>
-      <p class="hint">修改后保存立即生效（无需重启）。切块产物目录必须包含 <code>_manifest.json</code>。</p>
+      <p class="hint">修改后保存立即生效（无需重启）。切块产物目录要包含 <code>_manifest.json</code>；
+        本地数据目录按「<code>source/</code> 放原文件、<code>chunks/</code> 放切块」两目录约定，可留空。两者至少有一个可用。</p>
 
       <label class="field">
         <span>切块产物目录 <code>chunks_dir</code></span>
@@ -88,6 +89,11 @@
       <label class="field">
         <span>FAC-RAG 根目录 <code>fac_root</code>（用于推导默认产物目录）</span>
         <input id="cfg-fac-root" type="text" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>本地数据目录 <code>data_root</code>（下含 <code>source/</code> 与 <code>chunks/</code>，可留空）</span>
+        <input id="cfg-data-root" type="text" placeholder="例如 data 或 D:\chunk-data" spellcheck="false">
       </label>
 
       <label class="field">
@@ -187,6 +193,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.21-p2u" defer></script>
+  <script src="/static/app.js?v=0.3.22-p2v" defer></script>
 </body>
 </html>

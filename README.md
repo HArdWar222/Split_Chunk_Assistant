@@ -140,7 +140,7 @@ python -m chunk_studio.server --port 8790 --open
 
 浏览器打开 http://127.0.0.1:8790 ：
 
-- 左侧 97 个法规文件（分组 / 搜索 / 块数 / gate 徽章），点击打开三栏；
+- 左侧法规文件（分组 / 搜索 / 块数 / gate 徽章，本地数据源的文件带绿色「本地」徽章），点击打开三栏；
 - 中间是原文 `.md` 的源码行（行号 gutter、标题/引用/表格/超长行折叠）；
 - 右侧是切片卡片（15 字段摘要 + extras + 对齐状态），顶部显示 `对齐 N/N (率) · 各档计数`；
 - hover 卡片 → 原文行淡高亮；hover 原文行 → 关联卡片标记；click 卡片 → 滚动并强高亮对应原文行；
@@ -158,18 +158,41 @@ python -m chunk_studio.server --port 8790 --open
 {
   "fac_root": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG",
   "chunks_dir": "C:\\Users\\QiuYe\\Desktop\\FAC-RAG\\data\\chunks_v2",
+  "data_root": "data",
   "source_roots": {},
   "port": 8790
 }
 ```
 
+## 两种数据源（FAC-RAG 清单 / 本地两目录）
+
+工作台可以同时读两种来源，左栏合并显示：
+
+1. **FAC-RAG 清单模式**（原有）：`chunks_dir` 下有 `_manifest.json` + `<分组>__<文件名>.jsonl` + `_extras.jsonl`，带 gate / warnings / sha256，默认 97 份 12,718 块。
+2. **本地两目录模式**（2026-11-04 新增）：配置 `data_root`（默认 `data/`，已 gitignore），约定如下：
+
+```
+data/
+├── source/                      ← 原文件 .md，可带子目录（子目录名进分组）
+│   └── 2025版山东省自由裁量标准.md
+└── chunks/                      ← 切片，文件名与源文件同名
+    ├── 2025版山东省自由裁量标准.chunks.jsonl    ← 必需（每行一个块，缺 token_len 会现算）
+    └── 2025版山东省自由裁量标准.extras.jsonl    ← 可选（每行平铺，按 id 关联）
+```
+
+- 加新文档：把 `.md` 丢进 `source/`、把 `<同名>.chunks.jsonl`（和可选的 `.extras.jsonl`）丢进 `chunks/`，刷新页面即可看到；子目录名会成为分组名（如 `data/子目录/`）。
+- 两目录配对靠「同名 + 同相对路径」，源文件缺失只记 warning，仍可查看切片。
+- 本地源没有 gate/sha256 等质检信息，界面对应位置显示「—」；对齐、编辑、表格视图、行选择全部照常可用。
+- 设置面板（⚙ 设置）里可改 `data_root`，留空则只读 FAC-RAG 清单；两者至少一个可用即可启动。
+
 验收 / 自测口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 123 个测试
+python -m unittest discover -s tests -t . -v   :: 140 个测试
 ```
 
-- `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60
+- `/api/files` 合计 **97 个文件 / 12 718 块**，分组 national_laws 37 + GB_laws 60；配置本地数据源后 `mode=both`，合计 **98 文件 / 13 475 块**（多一组 `data: 757`），`sources` 列出两个源
+- 本地数据源实测：`data/2025版山东省自由裁量标准` 757 块 / 606 行，对齐 **756/757（99.87%）**；`/api/tables` 返回 687 张表（首表 headers `编号|违法行为|法律规定|处罚依据|裁量阶次|适用条件|处罚标准`）
 - `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
 - `/api/tables?key=…` 返回该文件所有表块的 `table_grid`（`chunk_id → {headers, rows, width, header_rows, note_from, table_label, table_title, table_mode, table_rows}`，最近 8 个文件缓存）；用于右栏表格可视化，缺 key 400、未知 key 404
 - 消防法：411 行 / 74 块 / 对齐 **74/74（100%）**
@@ -191,7 +214,7 @@ python -m unittest discover -s tests -t . -v   :: 123 个测试
 | TSG 21-2016 气瓶安全技术规程 | 561 | 100% | substr 466 / exact 64 |
 | 全部 97 份 | 12 718 | **96.3%** | 未对齐 467 块（集中在少数含合并单元格复杂表的文件，UI 灰标） |
 
-P1 只消费 FAC-RAG **已切好的 JSON**（`_manifest.json` + `*.jsonl` + `_extras.jsonl`），
+P1 只消费**已切好的 JSON**（FAC-RAG 的 `_manifest.json` + `*.jsonl` + `_extras.jsonl`，或本地 `data/source` + `data/chunks` 两目录），
 不 import `fac_rag`、不调用切块器；参数重切（P4）才会新增裸调用入口。
 
 ---
@@ -208,6 +231,7 @@ Split_assistant/
 ├── docs/                     ← 设计文档（8 篇）
 ├── prototype/                ← 数据层草稿（P0 起被 chunk_studio 取代）
 ├── reference/                ← 历史资料：chunking_v2 快照与代码审查（不随仓库发布）
+├── data/                     ← 本地两目录数据源：source/ + chunks/（gitignore，不随仓库发布）
 └── scratch/                  ← 一次性探针脚本（不随仓库发布）
 ```
 

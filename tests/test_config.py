@@ -9,7 +9,7 @@ from chunk_studio.config import (
     Config,
     ConfigError,
 )
-from tests.fixtures import make_chunks_dir, workspace_tmp
+from tests.fixtures import make_chunks_dir, make_data_dir, workspace_tmp
 
 
 class ConfigDefaultsTest(unittest.TestCase):
@@ -89,6 +89,65 @@ class ConfigValidateTest(unittest.TestCase):
             loaded = Config.load(path)
             self.assertEqual(loaded.port, 8899)
             self.assertEqual(loaded.chunks_dir, str(Path(tmp) / "chunks"))
+
+
+class ConfigDataRootTest(unittest.TestCase):
+    def test_relative_data_root_resolves_to_repo(self):
+        from chunk_studio.config import REPO_ROOT
+
+        cfg = Config(data_root="data")
+        self.assertEqual(Path(cfg.data_root), Path(REPO_ROOT) / "data")
+
+    def test_roundtrip_keeps_data_root(self):
+        with workspace_tmp() as tmp:
+            data = make_data_dir(Path(tmp))
+            cfg = Config(data_root=str(data))
+            back = Config.from_dict(cfg.to_dict())
+            self.assertEqual(back.data_root, cfg.data_root)
+
+    def test_data_available_detects_dirs(self):
+        with workspace_tmp() as tmp:
+            data = make_data_dir(Path(tmp))
+            self.assertTrue(Config(data_root=str(data)).data_available())
+            self.assertFalse(Config().data_available())
+            self.assertFalse(Config(data_root=str(Path(tmp) / "nope")).data_available())
+
+    def test_validate_ok_with_data_only(self):
+        """FAC-RAG manifest 不可用、本地两目录可用时，配置也算有效。"""
+        with workspace_tmp() as tmp:
+            data = make_data_dir(Path(tmp))
+            cfg = Config(
+                fac_root=tmp,
+                chunks_dir=str(Path(tmp) / "nope"),
+                data_root=str(data),
+            )
+            self.assertEqual(cfg.validate(), [])
+
+    def test_validate_reports_incomplete_data_dir(self):
+        with workspace_tmp() as tmp:
+            data = Path(tmp) / "data"
+            (data / "source").mkdir(parents=True)
+            cfg = Config(
+                fac_root=tmp,
+                chunks_dir=str(Path(tmp) / "nope"),
+                data_root=str(data),
+            )
+            errors = cfg.validate()
+            self.assertTrue(any("不完整" in e for e in errors), errors)
+
+    def test_validate_missing_data_dir(self):
+        with workspace_tmp() as tmp:
+            cfg = Config(
+                fac_root=tmp,
+                chunks_dir=str(Path(tmp) / "nope"),
+                data_root=str(Path(tmp) / "missing"),
+            )
+            self.assertTrue(any("本地数据目录不存在" in e for e in cfg.validate()))
+
+    def test_merged_updates_data_root(self):
+        cfg = Config(data_root="data")
+        merged = cfg.merged({"data_root": "D:\\chunk-data"})
+        self.assertEqual(merged.data_root, "D:\\chunk-data")
 
 
 if __name__ == "__main__":

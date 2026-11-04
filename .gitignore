@@ -41,3 +41,5 @@ _scan_*.py
 _probe*.py
 _verify*.py
 _msg*.txt
+
+data/

@@ -72,11 +72,26 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 │   ├── test_overlay.py      保存→重开一致性
 │   └── test_api.py          随机端口 HTTP 冒烟
 ├── prototype\                数据层草稿（P0 拆分后废弃）
+├── data\                     本地两目录数据源（gitignore：source/ + chunks/）
 ├── reference\                历史资料（gitignore）
 └── scratch\                  一次性脚本（gitignore）
 ```
 
 后端约 1,600 行，前端约 800 行，合计约 2,400 行，**无任何第三方依赖**。
+
+### 2.1 数据源：清单模式与本地两目录模式（2026-11-04）
+
+`manifest.py` 提供两个同签名实现，`studio.py` 可同时挂两个桥：
+
+| 模式 | 类 | 目录约定 | 元数据 |
+|---|---|---|---|
+| manifest（FAC-RAG 产物） | `Manifest` | `chunks_dir/_manifest.json` + `<group>__<名>.jsonl` + 全局 `_extras.jsonl` | 完整：gate、warnings、sha256、char_coverage |
+| dirs（本地两目录） | `DirManifest` | `<data_root>/source/**.md` + `<data_root>/chunks/<名>.chunks.jsonl`（+ 同名 `.extras.jsonl` 可选） | 现算：块数、kinds、覆盖率；gate/warnings 显示「—」 |
+
+- 子目录即分组（`data/<子目录>`），源与切片按「同名 + 同相对路径」配对；源缺失只记 warning，仍可打开看切片。
+- `FacBridge` 接受 `Manifest` 或 `DirManifest` 实例；本地包里缺 `token_len` 时用 `len(chunk)` 补、`part_index/part_total` 转 int。
+- `Studio.bridge_for(key)` 先查 manifest 源、再查本地源；`/api/files` 返回 `mode`（both / manifest / dirs）与 `sources`（每个源的块数、目录、generated_at），`/api/config` 额外回 `data_root`、`data_ok`、`data_error`。
+- 设置面板可留空其中一种：两者至少一种可用即可启动。本地数据目录默认 `data/`，已加入 `.gitignore`（数据不进仓库）。
 
 ---
 

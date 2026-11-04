@@ -110,6 +110,12 @@
 - **理由**：用户需要控制改动范围和节奏，避免未经确认的重构或扩大改动；每轮改动都应可预期、可回滚。
 - **后果**：每轮改动的沟通多一步；因此提案要简短可执行，验证口径必须在动手前就约定好。
 
+## D18 · 支持「本地两目录」数据源，与 FAC-RAG manifest 并存（2026-11-04）
+
+- **决定**：新增 `data_root`（`source/` + `chunks/`）模式（`DirManifest`），与既有 FAC-RAG manifest 模式并存；`/api/files` 同时列两源，设置里可留空其一。
+- **理由**：用户手里有「切块包」格式的成品（`<名>.chunks.jsonl` + `.extras.jsonl` + 同名 `.md`，无 `_manifest.json`），不想为此改 FAC-RAG 或伪造清单；两目录约定最省心（丢文件即可看）。
+- **后果**：本地源缺 gate/warnings/sha256，界面显示「—」；`token_len` 缺失时按 `len(chunk)` 现算；同名文件在不同源里靠 key 前缀（`manifest group` vs `data/…`）区分，避免 id 撞号；数据目录 `data/` 加入 `.gitignore`。
+
 ---
 
 ## 待定问题

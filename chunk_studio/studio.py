@@ -17,7 +17,7 @@ from pathlib import Path
 from .align import align_chunks, summarize_align
 from .config import Config, ConfigError
 from .fac_bridge import FacBridge
-from .manifest import ManifestError
+from .manifest import DirManifest, Manifest, ManifestError
 from .ops import OpError, apply_ops, chunk_diff
 from .source import (
     default_roots_from_manifest,
@@ -72,7 +72,9 @@ class Studio:
         self.config_path = Path(config_path) if config_path else None
         self.cfg = cfg or Config.load(self.config_path)
         self._bridge: FacBridge | None = None
+        self._data_bridge: FacBridge | None = None
         self._error: str | None = None
+        self._data_error: str | None = None
         self._doc_cache: "OrderedDict[str, dict]" = OrderedDict()
         self._tables_cache: "OrderedDict[str, dict]" = OrderedDict()
         self._default_roots: dict[str, str] = {}
@@ -84,58 +86,129 @@ class Studio:
     # -- 内部 -----------------------------------------------------------
     def _init_bridge(self) -> None:
         self._bridge = None
+        self._data_bridge = None
         self._error = None
+        self._data_error = None
         self._doc_cache.clear()
         self._tables_cache.clear()
         self._ops.clear()
         self._redo.clear()
         self._default_roots = {}
+        # 1) FAC-RAG manifest 源（默认只读基线）
         try:
             bridge = FacBridge(self.cfg.chunks_dir)
             _ = bridge.manifest  # 先触发加载，尽早暴露错误
             self._bridge = bridge
             self._default_roots = default_roots_from_manifest(bridge.manifest)
-        except ManifestError as exc:
+        except (ManifestError, OSError) as exc:
             self._error = str(exc)
+        # 2) 本地「两目录」源（可选，data_root 为空时跳过）
+        if self.cfg.data_root:
+            try:
+                data_bridge = FacBridge(DirManifest(self.cfg.data_root))
+                _ = data_bridge.manifest
+                self._data_bridge = data_bridge
+            except (ManifestError, OSError) as exc:
+                self._data_error = str(exc)
 
     # -- 对外 -----------------------------------------------------------
     @property
     def bridge(self) -> FacBridge:
+        """FAC-RAG manifest 源；本地源可用时也允许为空。"""
         if self._bridge is None:
             raise ManifestError(self._error or "切块产物不可用")
         return self._bridge
 
     @property
+    def data_bridge(self) -> FacBridge | None:
+        return self._data_bridge
+
+    def bridges(self) -> list[FacBridge]:
+        out = []
+        if self._bridge is not None:
+            out.append(self._bridge)
+        if self._data_bridge is not None:
+            out.append(self._data_bridge)
+        return out
+
+    def bridge_for(self, key: str) -> FacBridge:
+        """按 key 找所属数据源（先 FAC-RAG，后本地两目录）。"""
+        if self._bridge is not None and key in self._bridge.manifest.files:
+            return self._bridge
+        if self._data_bridge is not None and key in self._data_bridge.manifest.files:
+            return self._data_bridge
+        raise ManifestError(f"没有这个文件：{key}")
+
+    @property
     def available(self) -> bool:
-        return self._bridge is not None
+        return self._bridge is not None or self._data_bridge is not None
 
     @property
     def error(self) -> str | None:
-        return self._error
+        if self._bridge is None and self._data_bridge is None:
+            return self._error or self._data_error or "切块产物不可用"
+        return None
 
     def reload(self) -> None:
         self._init_bridge()
 
     # -- 载荷 -----------------------------------------------------------
     def files_payload(self) -> dict:
-        """文件清单（左栏数据）。"""
-        if self._bridge is None:
+        """文件清单（左栏数据），FAC-RAG 与本地两目录源合并展示。"""
+        payloads = [b.manifest.payload() for b in self.bridges()]
+        if not payloads:
             return {
                 "ok": False,
                 "chunks_dir": self.cfg.chunks_dir,
-                "error": self._error or "切块产物不可用",
+                "error": self.error or "切块产物不可用",
                 "config": self.config_payload(),
             }
-        payload = self._bridge.manifest.payload()
-        payload["config"] = self.config_payload()
+        groups: list[dict] = []
+        sources: list[dict] = []
+        n_files = 0
+        n_chunks = 0
+        kinds: dict[str, int] = {}
+        for bridge in self.bridges():
+            manifest = bridge.manifest
+            n_files += manifest.n_files
+            n_chunks += manifest.n_chunks
+            for kind, count in (manifest.payload()["totals"].get("kinds") or {}).items():
+                kinds[kind] = kinds.get(kind, 0) + int(count)
+            sources.append(bridge.stats())
+        for item in payloads:
+            groups.extend(item["groups"])
+        first = payloads[0]
+        payload = {
+            "ok": True,
+            "mode": "both" if len(payloads) > 1 else first["mode"],
+            "chunks_dir": first["chunks_dir"],
+            "generated_at": first["generated_at"],
+            "engine": first["engine"],
+            "totals": {
+                "n_files": n_files,
+                "n_chunks": n_chunks,
+                "kinds": kinds,
+                "char_coverage": first["totals"].get("char_coverage", 0),
+                "gate_ok": all(
+                    bool(item["totals"].get("gate_ok", True)) for item in payloads
+                ),
+            },
+            "groups": groups,
+            "sources": sources,
+            "config": self.config_payload(),
+        }
         return payload
 
     def config_payload(self) -> dict:
         """配置 + 从 manifest 推导的默认源根目录（设置面板展示用）。"""
+        data_root = self.cfg.data_root
         return {
             "ok": True,
             "fac_root": self.cfg.fac_root,
             "chunks_dir": self.cfg.chunks_dir,
+            "data_root": data_root,
+            "data_source_dir": str(Path(data_root) / "source") if data_root else "",
+            "data_chunks_dir": str(Path(data_root) / "chunks") if data_root else "",
             "source_roots": dict(self.cfg.source_roots),
             "default_source_roots": dict(self._default_roots),
             "groups": list(self._default_roots.keys()),
@@ -143,6 +216,17 @@ class Studio:
             "errors": self.cfg.validate(),
             "manifest_ok": self._bridge is not None,
             "manifest_error": self._error,
+            "data_ok": self._data_bridge is not None,
+            "data_error": self._data_error,
+            "mode": (
+                "both"
+                if self._bridge is not None and self._data_bridge is not None
+                else "manifest"
+                if self._bridge is not None
+                else "dirs"
+                if self._data_bridge is not None
+                else "none"
+            ),
         }
 
     def update_config(self, patch: dict) -> dict:
@@ -156,8 +240,8 @@ class Studio:
         merged.save(self.config_path)
         self.cfg = merged
         self.reload()
-        if self._bridge is None:
-            raise ConfigError(self._error or "改了配置后产物依然不可用")
+        if self._bridge is None and self._data_bridge is None:
+            raise ConfigError(self.error or "改了配置后产物依然不可用")
         return self.config_payload()
 
     # -- 单文件三栏载荷（P1 只读 + P2 会话内编辑） -----------------------
@@ -166,16 +250,17 @@ class Studio:
 
         基线永远是「产物里的原样」，任何编辑都不改它；每次请求在其上重放命令。
         """
-        if self._bridge is None:
-            raise ManifestError(self._error or "切块产物不可用")
+        if not self.available:
+            raise ManifestError(self.error or "切块产物不可用")
         cached = self._doc_cache.get(key)
         if cached is not None:
             self._doc_cache.move_to_end(key)
             return cached
 
-        entry = self._bridge.manifest.get(key)
-        chunks = self._bridge.chunks(key)
-        extras = self._bridge.extras(key)
+        bridge = self.bridge_for(key)
+        entry = bridge.manifest.get(key)
+        chunks = bridge.chunks(key)
+        extras = bridge.extras(key)
         source_path = locate_source(self.cfg, entry, default_roots=self._default_roots)
         lines = read_lines(source_path)
         aligned = align_chunks(chunks, lines, extras)
@@ -303,15 +388,16 @@ class Studio:
         不塞进 doc_payload 的原因：山东自由裁量标准这类文件有 684 个表块，
         网格 JSON 约 400KB，能画表格的页面按需单独取一次即可。
         """
-        if self._bridge is None:
-            raise ManifestError(self._error or "切块产物不可用")
+        if not self.available:
+            raise ManifestError(self.error or "切块产物不可用")
         cached = self._tables_cache.get(key)
         if cached is not None:
             self._tables_cache.move_to_end(key)
             return cached
 
-        entry = self._bridge.manifest.get(key)
-        extras = self._bridge.extras(key)
+        bridge = self.bridge_for(key)
+        entry = bridge.manifest.get(key)
+        extras = bridge.extras(key)
         tables: dict[str, dict] = {}
         for chunk_id, extra in extras.items():
             grid = extra.get("table_grid")

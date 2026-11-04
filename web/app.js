@@ -84,6 +84,7 @@
     form: document.getElementById("settings-form"),
     chunksDir: document.getElementById("cfg-chunks-dir"),
     facRoot: document.getElementById("cfg-fac-root"),
+    dataRoot: document.getElementById("cfg-data-root"),
     port: document.getElementById("cfg-port"),
     sourceRoots: document.getElementById("cfg-source-roots"),
     cfgErrors: document.getElementById("cfg-errors"),
@@ -685,7 +686,9 @@
         btn.dataset.key = file.key;
 
         var badges = [];
-        if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
+        if (file.local) {
+          badges.push("<span class='badge badge-local'>本地</span>");
+        } else if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
         else if (file.gate_ok === true) badges.push("<span class='badge badge-ok'>gate ✓</span>");
         if (file.n_warnings > 0) badges.push("<span class='badge badge-warn'>warning " + file.n_warnings + "</span>");
 
@@ -2888,6 +2891,7 @@
     if (cfg.ok === false) cfg = cfg.config || cfg;
     el.chunksDir.value = cfg.chunks_dir || "";
     el.facRoot.value = cfg.fac_root || "";
+    el.dataRoot.value = cfg.data_root || "";
     el.port.value = cfg.port || 8790;
     renderSourceRoots(cfg);
     el.cfgErrors.hidden = true;
@@ -2936,6 +2940,7 @@
     return {
       chunks_dir: el.chunksDir.value.trim(),
       fac_root: el.facRoot.value.trim(),
+      data_root: el.dataRoot.value.trim(),
       port: parseInt(el.port.value, 10) || 8790,
       source_roots: sourceRoots
     };

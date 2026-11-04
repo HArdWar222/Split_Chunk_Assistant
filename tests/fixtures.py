@@ -167,3 +167,65 @@ def make_chunks_dir(base: Path) -> Path:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     text = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n"
     path.write_text(text, encoding="utf-8")
+
+
+def make_data_dir(base: Path) -> Path:
+    """创建本地「两目录」数据源：``<base>/data/source`` + ``<base>/data/chunks``。
+
+    刻意模拟真实切块包：chunk 只有 14 字段（**没有 token_len**），
+    part_index/part_total 是字符串，extras 是字段平铺的 jsonl。
+    """
+    data_root = base / "data"
+    source_dir = data_root / "source"
+    chunks_dir = data_root / "chunks"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    name = "测试包法规"
+    (source_dir / (name + ".md")).write_text(
+        "# 测试包法规\n\n第一条 为测试本地包。\n\n第二条 本地包结束。\n",
+        encoding="utf-8",
+    )
+
+    chunks = [
+        {
+            "id": name + "-0001",
+            "chunk": "第一条 为测试本地包。",
+            "law_name": name,
+            "law_num": "第一条",
+            "law_invalid": "",
+            "law_type": "",
+            "law_level": "",
+            "issuer": "",
+            "effective_date": "",
+            "chunk_kind": "clause",
+            "source": "",
+            "part_index": "1",
+            "part_total": "1",
+            "chunk_hash": "d" * 16,
+        },
+        {
+            "id": name + "-0002",
+            "chunk": "第二条 本地包结束。",
+            "law_name": name,
+            "law_num": "第二条",
+            "law_invalid": "",
+            "law_type": "",
+            "law_level": "",
+            "issuer": "",
+            "effective_date": "",
+            "chunk_kind": "clause",
+            "source": "",
+            "part_index": "1",
+            "part_total": "1",
+            "chunk_hash": "e" * 16,
+        },
+    ]
+    _write_jsonl(chunks_dir / (name + ".chunks.jsonl"), chunks)
+    extras = [
+        {"id": name + "-0001", "table_label": "", "region": "body", "clause": "第一条"},
+        {"id": name + "-0002", "table_label": "", "region": "body", "clause": "第二条"},
+    ]
+    _write_jsonl(chunks_dir / (name + ".extras.jsonl"), extras)
+    return data_root
+
