@@ -945,3 +945,10 @@ body.row-picking { user-select: none; }
   text-align: center;
 }
 .sidebar.dragging { outline: 3px dashed #2563eb; outline-offset: -3px; background: #f8fbff; }
+
+/* 混合块（正文 + 表格）：段落文字在上、块内表格网格在下 */
+.mixed-table { margin: 10px 0 4px; }
+.mixed-table .grid-table { margin-top: 4px; }
+.mixed-table-head { font-size: 12px; color: #64748b; margin: 10px 0 4px; }
+.mixed-table .tblwrap { max-height: 320px; overflow: auto; }
+

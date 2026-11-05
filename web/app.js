@@ -331,6 +331,34 @@
     };
   }
 
+  // 混合块（P3 展示层）：一个切片的正文里既有段落文字、又有表格内容时，
+  // 卡片里先显示正文，再把「该切片 span 覆盖到的原文表格」按原文表格渲染出来。
+  // 数据不动：表格直接从原文窗格克隆，刷新/重新加载后仍能重建。
+  function sourceTablesForChunk(chunk) {
+    if (!el.source || !chunk || !chunk.span) return [];
+    var start = chunk.span[0];
+    var end = chunk.span[1];
+    var found = [];
+    el.source.querySelectorAll(".line.table-block").forEach(function (block) {
+      var line = parseInt(block.dataset.line, 10);
+      if (!isFinite(line) || line < start || line > end) return;
+      var table = block.querySelector(".tblwrap table");
+      if (!table) return;
+      var clone = table.cloneNode(true);
+      clone.querySelectorAll(".hl, .row-active, .sel-row, .chunk-row, .row-gap").forEach(function (node) {
+        node.classList.remove("hl", "row-active", "sel-row", "chunk-row", "row-gap");
+      });
+      clone.querySelectorAll("[style]").forEach(function (node) { node.removeAttribute("style"); });
+      clone.querySelectorAll("tr").forEach(function (tr) {
+        tr.removeAttribute("data-chunk");
+        tr.removeAttribute("data-rowno");
+        tr.removeAttribute("title");
+      });
+      found.push({ line: line, table: clone });
+    });
+    return found;
+  }
+
   // 切片正文 → 可视化 HTML：优先 table_grid；否则按管道表 / HTML 表解析；纯文字回退 pre
   function chunkBodyHtml(chunk) {
     var raw = String(chunk.chunk === null || chunk.chunk === undefined ? "" : chunk.chunk);
@@ -342,6 +370,16 @@
       return buildGridTableHtml(grid) +
         '<details class="chunk-raw"><summary>原始正文（送进检索的就是这段文字）</summary>' +
         '<pre class="chunk-raw-pre">' + escapeHtml(raw) + '</pre></details>';
+    }
+
+    var sourceTables = sourceTablesForChunk(chunk);
+    if (sourceTables.length) {
+      var html = '<pre class="chunk-body">' + escapeHtml(raw) + '</pre>';
+      sourceTables.forEach(function (item) {
+        html += '<div class="mixed-table"><div class="mixed-table-head">本切片覆盖的原文表格 · 第 ' + item.line + ' 行</div>' +
+          '<div class="tblwrap">' + item.table.outerHTML + '</div></div>';
+      });
+      return html;
     }
 
     var lines = raw.split("\n");
