@@ -493,6 +493,21 @@ def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lin
     return out
 
 
+def _drop_many(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
+    """一次删除多个切片（原子命令，一次 Ctrl+Z 撤销）。"""
+    ids = op.get("ids")
+    if not isinstance(ids, (list, tuple)) or not ids:
+        raise OpError("drop_many 需要 ids（非空数组）")
+    wanted = [str(item) for item in ids]
+    known = {str(chunk.get("id")) for chunk in chunks}
+    missing = [item for item in wanted if item not in known]
+    if missing:
+        raise OpNotFound("找不到切片：" + "、".join(missing[:3]) + ("…" if len(missing) > 3 else ""))
+    drop = set(wanted)
+    out = [chunk for chunk in chunks if str(chunk.get("id")) not in drop]
+    return _reindex_parts(out)
+
+
 def _clause_anchor(chunk: dict) -> str:
     """取一块可作为条号参照的 law_num（「第X条」或「5.4.1」）；占位/表号/附录号不算。"""
     candidate = str(chunk.get("law_num") or "").strip()
@@ -617,6 +632,7 @@ HANDLERS = {
     "merge_many": _merge_many,
     "extend": _extend,
     "drop": _drop,
+    "drop_many": _drop_many,
     "add": _add,
     "patch": _patch,
 }

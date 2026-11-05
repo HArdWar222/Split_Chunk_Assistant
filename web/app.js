@@ -34,6 +34,7 @@
     rowPickMoved: false, // 本次按下后是否真的拖动过
     suppressNextClick: false, // 拖选/Shift 选行后吞掉紧随其后的 click
     rowPickClick: false,      // 本次 mousedown 是否是「单击」（未按 Shift）
+    multiSel: new Set(),      // Ctrl/⌘ 多选中的 chunk id 集合
     programmaticScroll: 0, // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
     draftTimer: 0 // 草稿自动保存的防抖定时器
   };
@@ -103,6 +104,10 @@
     watchChip: document.getElementById("watch-chip"),
     cfgErrors: document.getElementById("cfg-errors"),
     btnCancel: document.getElementById("btn-cancel"),
+    choiceDialog: document.getElementById("choice-dialog"),
+    choiceTitle: document.getElementById("choice-title"),
+    choiceText: document.getElementById("choice-text"),
+    choiceActions: document.getElementById("choice-actions"),
     toast: document.getElementById("toast"),
     splitCaret: document.getElementById("split-caret"),
     splitHint: document.getElementById("split-hint"),
@@ -1230,14 +1235,31 @@
           if (action.act === "split") openSplit(chunk);
           else if (action.act === "merge-prev") mergeChunk(chunk, "prev");
           else if (action.act === "merge-next") mergeChunk(chunk, "next");
-          else if (action.act === "drop") dropChunk(chunk);
+          else if (action.act === "drop") requestDelete(chunk);
           else if (action.act === "edit") openEdit(chunk);
         });
         ops.appendChild(btn);
       });
       card.appendChild(ops);
 
-      card.addEventListener("click", function () { selectChunk(chunk, { scrollSource: true, scrollCard: false }); });
+      card.classList.toggle("multi-sel", state.multiSel && state.multiSel.has(chunk.id));
+      card.addEventListener("click", function (ev) {
+        if (ev.metaKey || ev.ctrlKey) {
+          ev.preventDefault();
+          if (!state.multiSel) state.multiSel = new Set();
+          if (state.multiSel.has(chunk.id)) state.multiSel.delete(chunk.id);
+          else state.multiSel.add(chunk.id);
+          card.classList.toggle("multi-sel", state.multiSel.has(chunk.id));
+          if (state.multiSel.size) {
+            setStatus("已选 " + state.multiSel.size + " 个切片 · Delete 删除所选（一次撤销）· Esc 取消", "ok");
+          } else {
+            setStatus("已取消多选", "ok");
+          }
+          return;
+        }
+        clearMultiSel();
+        selectChunk(chunk, { scrollSource: true, scrollCard: false });
+      });
       frag.appendChild(card);
       state.cardEls[chunk.id] = card;
     });
@@ -2214,6 +2236,19 @@
       }
     }
 
+    // 选区覆盖的切片一次性删除（可跨块，允许夹未切片行）
+    if (picked && picked.text.trim()) {
+      var delHits = chunksInLineRange(picked.start, picked.end);
+      if (delHits.length >= 2 || (delHits.length === 1 && !target)) {
+        el.ctxMenu.appendChild(ctxItem(
+          "✕ 删除所选 " + delHits.length + " 个切片",
+          "第 " + picked.start + "–" + picked.end + " 行 · 一次撤销",
+          function () { dropChunks(delHits); }
+        ));
+        count++;
+      }
+    }
+
     if (target) {
       var idx = doc.chunks.indexOf(target);
       if (count) el.ctxMenu.appendChild(ctxSep());
@@ -2224,7 +2259,7 @@
       el.ctxMenu.appendChild(ctxItem("✂ 拆分此切片…", target.id, function () { openSplit(target); }));
       el.ctxMenu.appendChild(ctxItem("⤴ 并入上一块", "", function () { mergeChunk(target, "prev"); }, idx <= 0));
       el.ctxMenu.appendChild(ctxItem("⤵ 并入下一块", "", function () { mergeChunk(target, "next"); }, idx >= doc.chunks.length - 1));
-      el.ctxMenu.appendChild(ctxItem("✕ 删除此切片", target.id, function () { dropChunk(target); }));
+      el.ctxMenu.appendChild(ctxItem("✕ 删除此切片", target.id, function () { requestDelete(target); }));
       el.ctxMenu.appendChild(ctxSep());
       el.ctxMenu.appendChild(ctxItem("◎ 定位到切片", rangeHint, function () {
         selectChunk(target, { scrollSource: true, scrollCard: true });
@@ -2698,36 +2733,144 @@
     postEditCmd("/api/reset", "已重置到自动切块结果");
   }
 
-  function dropChunk(chunk) {
-    if (!chunk) return;
-    var droppedId = chunk.id;
-    state.activeChunk = null;
-    postOp({ op: "drop", id: droppedId }, "已删除 " + droppedId + "（Ctrl+Z 可撤销）", function () {
-      // 删除后停留在原行：滚动位置由 applyDocPayload 保持，这里只补一句明确提示
-      setStatus("已删除 " + droppedId + " · 原文与表格位置保持不变（Ctrl+Z 可撤销）", "ok");
+  // 多选弹层：返回被点按钮的 value（取消/关闭返回 null）
+  function askChoice(title, text, options) {
+    return new Promise(function (resolve) {
+      el.choiceTitle.textContent = title;
+      el.choiceText.textContent = text;
+      el.choiceActions.innerHTML = "";
+      var settled = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        if (el.choiceDialog.open) el.choiceDialog.close();
+        resolve(value);
+      }
+      options.forEach(function (option) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn" + (option.primary ? " btn-primary" : "");
+        btn.textContent = option.label;
+        btn.addEventListener("click", function () { finish(option.value); });
+        el.choiceActions.appendChild(btn);
+      });
+      function onCancel(ev) {
+        ev.preventDefault();
+        el.choiceDialog.removeEventListener("cancel", onCancel);
+        finish(null);
+      }
+      el.choiceDialog.addEventListener("cancel", onCancel);
+      el.choiceDialog.showModal();
     });
   }
 
-  // 批量删除（表格行选区）：顺序逐块删除，全部完成后提示一次
+  function partBaseId(chunk) {
+    return String((chunk && chunk.id) || "").replace(/-p\d+$/, "");
+  }
+
+  // 同组分片（含自己）；非分片只有自己
+  function partGroup(chunk) {
+    if (!state.doc || !chunk) return [];
+    if ((chunk.part_total || 1) <= 1) return [chunk];
+    var base = partBaseId(chunk);
+    return state.doc.chunks.filter(function (c) { return partBaseId(c) === base; });
+  }
+
+  // 一次原子删除：单个 drop_many，一次 Ctrl+Z 撤销
+  function doDrop(ids, message) {
+    if (!ids || !ids.length) return;
+    state.activeChunk = null;
+    postOp(
+      { op: "drop_many", ids: ids },
+      message || ("已删除 " + ids.length + " 个切片（Ctrl+Z 可撤销）"),
+      function () {
+        setStatus("已删除 " + ids.length + " 个切片 · 原文与表格位置保持不变（Ctrl+Z 可撤销）", "ok");
+      }
+    );
+  }
+
+  // Ctrl/⌘ 点卡片多选：返回当前选中的块
+  function selectedMultiChunks() {
+    if (!state.doc || !state.multiSel || !state.multiSel.size) return [];
+    return state.doc.chunks.filter(function (c) { return state.multiSel.has(c.id); });
+  }
+
+  function clearMultiSel() {
+    if (!state.multiSel) return;
+    state.multiSel.forEach(function (id) {
+      var card = state.cardEls[id];
+      if (card) card.classList.remove("multi-sel");
+    });
+    state.multiSel.clear();
+  }
+
+  // 删除一张卡片：分片先问「只删这一片 / 删除整组 / 取消」
+  function requestDelete(chunk) {
+    if (!chunk) return;
+    var total = chunk.part_total || 1;
+    if (total <= 1) {
+      doDrop([chunk.id], "已删除 " + chunk.id + "（Ctrl+Z 可撤销）");
+      return;
+    }
+    var group = partGroup(chunk);
+    askChoice(
+      "这是分片 part " + chunk.part_index + "/" + total,
+      "同组分片共 " + group.length + " 块。只删这一片会留下其它分片（编号自动顺延）；也可以一次删整组。",
+      [
+        { label: "只删这一片", value: "one" },
+        { label: "删除整组", value: "all", primary: true },
+        { label: "取消", value: null }
+      ]
+    ).then(function (choice) {
+      if (choice === "one") {
+        doDrop([chunk.id], "已删除分片 " + chunk.part_index + "/" + total + "（编号已顺延，Ctrl+Z 可撤销）");
+      } else if (choice === "all") {
+        doDrop(group.map(function (c) { return c.id; }), "已删除整组 " + group.length + " 个分片（Ctrl+Z 可撤销）");
+      }
+    });
+  }
+
+  // 批量删除（表格行选区 / 多选卡片）：一次 drop_many，一次撤销
   function dropChunks(chunks) {
     if (!state.doc || !chunks || !chunks.length) return;
-    var ids = chunks.map(function (c) { return c.id; });
-    state.activeChunk = null;
-    var i = 0;
-    function next() {
-      if (i >= ids.length) {
-        setStatus("已删除 " + ids.length + " 个切片（Ctrl+Z 可逐条撤销）", "ok");
-        return;
-      }
-      var id = ids[i++];
-      postJSON("/api/op", { key: state.docKey, op: { op: "drop", id: id } }).then(function (doc) {
-        applyDocPayload(doc);
-        next();
-      }).catch(function (err) {
-        opFailed(err, state.opErrEl);
-      });
+    var ids = [];
+    chunks.forEach(function (chunk) {
+      if (ids.indexOf(chunk.id) < 0) ids.push(chunk.id);
+    });
+    var partialBases = [];
+    var seen = {};
+    chunks.forEach(function (chunk) {
+      if ((chunk.part_total || 1) <= 1) return;
+      var base = partBaseId(chunk);
+      if (seen[base]) return;
+      seen[base] = true;
+      var group = state.doc.chunks.filter(function (c) { return partBaseId(c) === base; });
+      if (group.some(function (c) { return ids.indexOf(c.id) < 0; })) partialBases.push(base);
+    });
+    if (!partialBases.length) {
+      doDrop(ids);
+      return;
     }
-    next();
+    askChoice(
+      "选区包含没选全的分片",
+      "有 " + partialBases.length + " 组分片没有整组选中。要连同整组一起删，还是只删选中的块？",
+      [
+        { label: "只删选中的", value: "selected" },
+        { label: "连同整组一起删", value: "groups", primary: true },
+        { label: "取消", value: null }
+      ]
+    ).then(function (choice) {
+      if (!choice) return;
+      var finalIds = ids.slice();
+      if (choice === "groups") {
+        partialBases.forEach(function (base) {
+          state.doc.chunks.forEach(function (c) {
+            if (partBaseId(c) === base && finalIds.indexOf(c.id) < 0) finalIds.push(c.id);
+          });
+        });
+      }
+      doDrop(finalIds);
+    });
   }
 
   function mergeChunk(chunk, direction) {
@@ -3507,8 +3650,9 @@
         hideCtxMenu();
         hideSplitCaret();
         hideRowPick();
+        clearMultiSel();
         state.suppressNextClick = false;
-        [el.dialog, el.splitDialog, el.editDialog, el.addDialog].forEach(function (dlg) {
+        [el.dialog, el.splitDialog, el.editDialog, el.addDialog, el.choiceDialog].forEach(function (dlg) {
           if (dlg && dlg.open) dlg.close();
         });
         return;
@@ -3544,9 +3688,18 @@
         openSplit(findChunk(state.activeChunk));
         return;
       }
-      if (key === "delete" && state.activeChunk) {
-        ev.preventDefault();
-        dropChunk(findChunk(state.activeChunk));
+      if (key === "delete") {
+        var multi = selectedMultiChunks();
+        if (multi.length) {
+          ev.preventDefault();
+          dropChunks(multi);
+          clearMultiSel();
+          return;
+        }
+        if (state.activeChunk) {
+          ev.preventDefault();
+          requestDelete(findChunk(state.activeChunk));
+        }
       }
     });
     bindDocEvents();

@@ -1,10 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.28-p3b">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.29-p3c">
 </head>
 <body>
   <header class="topbar">
@@ -211,11 +211,19 @@
     </form>
   </dialog>
 
+  <dialog id="choice-dialog" class="dialog op-dialog choice-dialog">
+    <form method="dialog">
+      <h2 id="choice-title">请选择</h2>
+      <p class="hint" id="choice-text"></p>
+      <div class="choice-actions" id="choice-actions"></div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <div id="split-caret" class="split-caret" hidden aria-hidden="true"></div>
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.28-p3b" defer></script>
+  <script src="/static/app.js?v=0.3.29-p3c" defer></script>
 </body>
 </html>

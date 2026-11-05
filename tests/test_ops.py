@@ -290,6 +290,37 @@ class DropAddPatchTest(unittest.TestCase):
         out = apply_ops(base_chunks(), [{"op": "drop", "id": "测试法-0002"}], law_name=LAW)
         self.assertEqual([c["id"] for c in out], ["测试法-0001", "测试法-0003"])
 
+    def test_drop_many_is_one_command(self):
+        out = apply_ops(
+            base_chunks(),
+            [{"op": "drop_many", "ids": ["测试法-0001", "测试法-0003"]}],
+            law_name=LAW,
+        )
+        self.assertEqual([c["id"] for c in out], ["测试法-0002"])
+        self.assertEqual(out[0]["chunk"], "第二条 测试结束。")
+
+    def test_drop_many_missing_id_raises(self):
+        with self.assertRaises(OpNotFound) as ctx:
+            apply_ops(base_chunks(), [{"op": "drop_many", "ids": ["测试法-0001", "没有-0009"]}], law_name=LAW)
+        self.assertIn("找不到切片", str(ctx.exception))
+
+    def test_drop_many_reindexes_part_group(self):
+        chunks = [
+            make_chunk("测试法-0001", "第一条 开始。"),
+            make_chunk("测试法-0002-p1", "第二条 上。"),
+            make_chunk("测试法-0002-p2", "第二条 中。"),
+            make_chunk("测试法-0002-p3", "第二条 下。"),
+        ]
+        for index, chunk in enumerate(chunks[1:], start=1):
+            chunk["part_index"], chunk["part_total"] = index, 3
+        out = apply_ops(
+            chunks,
+            [{"op": "drop_many", "ids": ["测试法-0002-p2"]}],
+            law_name=LAW,
+        )
+        self.assertEqual([c["id"] for c in out], ["测试法-0001", "测试法-0002-p1", "测试法-0002-p2"])
+        self.assertEqual([c["part_total"] for c in out[1:]], [2, 2])
+
     def test_add_append_and_insert(self):
         out = apply_ops(base_chunks(), [{"op": "add", "text": "新的块正文"}], law_name=LAW)
         self.assertEqual(len(out), 4)

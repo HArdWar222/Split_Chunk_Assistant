@@ -917,3 +917,10 @@ body.row-picking { user-select: none; }
 .watch-chip.ok { color: #0f766e; border-color: #b7e4d8; background: #e8f7f3; }
 .watch-chip.warn { color: #92400e; border-color: #fcd34d; background: #fef3c7; }
 .watch-chip.err { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+
+/* 二选一/三选一弹层（删除分片 part 时用） */
+.choice-dialog .choice-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 12px; }
+.choice-dialog .btn { min-width: 96px; }
+
+/* Ctrl/⌘ 多选卡片 */
+.chunk-card.multi-sel { outline: 2px solid #a855f7; outline-offset: -2px; background: #faf5ff; }
