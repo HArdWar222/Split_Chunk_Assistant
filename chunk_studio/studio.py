@@ -18,6 +18,7 @@ from .align import align_chunks, summarize_align
 from .autopart import auto_part_chunks
 from .chunker import WatchService, engine_info
 from .config import Config, ConfigError
+from . import drafts
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, ManifestError
 from .ops import OpError, apply_ops, chunk_diff
@@ -80,6 +81,10 @@ class Studio:
         # P2 会话内编辑：key -> 命令列表；撤销 = 弹出并整体重放，不落盘（P3 才写覆盖层）
         self._ops: dict[str, list[dict]] = {}
         self._redo: dict[str, list[dict]] = {}
+        # P3 磁盘草稿：key -> {stem,path,baseline12,saved_at,stale,chunks}
+        self._drafts: dict[str, dict] = {}
+        # 有未写进草稿的会话内修改
+        self._dirty: set[str] = set()
         self._init_bridge()
         # 自动切块 / 轮询（引擎调用是子进程，工作台本身不 import 引擎）
         self.watch = WatchService(self)
@@ -92,6 +97,7 @@ class Studio:
         self._tables_cache.clear()
         self._ops.clear()
         self._redo.clear()
+        self._dirty.clear()
         self._default_roots = {}
         # 唯一数据源：本地「两目录」数据根（data/source + data/chunks）
         if not self.cfg.data_root:
@@ -103,6 +109,129 @@ class Studio:
             self._data_bridge = data_bridge
         except (ManifestError, OSError) as exc:
             self._data_error = str(exc)
+        finally:
+            self._load_drafts()
+
+    # -- 草稿（P3） ------------------------------------------------------
+    def _stem_for(self, key: str) -> str:
+        """文档 key → 草稿文件名主干（子目录拼 ``__``）。"""
+        entry = self.bridge.manifest.get(key)
+        chunks_path = Path(entry.jsonl)
+        doc_dir = chunks_path.parent
+        chunks_root = Path(self.cfg.data_root) / "chunks"
+        try:
+            rel = doc_dir.parent.relative_to(chunks_root).as_posix()
+        except ValueError:
+            rel = ""
+        return drafts.stem_for("" if rel == "." else rel, doc_dir.name)
+
+    def _load_drafts(self) -> None:
+        """扫描 data/draft，把基线仍然匹配的草稿加载进内存。"""
+        self._drafts = {}
+        if self._data_bridge is None:
+            return
+        draft_dir = Path(self.cfg.data_root) / "draft"
+        if not draft_dir.is_dir():
+            return
+        for key in list(self._data_bridge.manifest.files):
+            try:
+                stem = self._stem_for(key)
+            except ManifestError:
+                continue
+            entry = self._data_bridge.manifest.get(key)
+            chunks_path = Path(entry.jsonl)
+            if not chunks_path.is_file():
+                continue
+            current12 = drafts.sha12(chunks_path)
+            candidates = drafts.draft_files(draft_dir, stem)
+            if not candidates:
+                continue
+            path = max(candidates, key=lambda p: p.stat().st_mtime)
+            parsed = drafts.parse_draft_name(path.name)
+            if parsed is None:
+                continue
+            stale = parsed[1] != current12
+            self._drafts[key] = {
+                "stem": stem,
+                "path": path,
+                "baseline12": parsed[1],
+                "saved_at": path.stat().st_mtime,
+                "stale": stale,
+                "chunks": [] if stale else drafts.read_chunks(path),
+            }
+
+    def _active_draft(self, key: str) -> dict | None:
+        draft = self._drafts.get(key)
+        if draft and not draft.get("stale"):
+            return draft
+        return None
+
+    def draft_payload(self, key: str) -> dict:
+        """给 ``/api/doc`` 用的草稿状态（前端徽章 / 圆点用）。"""
+        draft = self._drafts.get(key)
+        if draft is None:
+            return {"exists": False, "stale": False, "baseline12": "", "saved_at": 0}
+        return {
+            "exists": bool(draft.get("chunks")),
+            "stale": bool(draft.get("stale")),
+            "baseline12": draft.get("baseline12") or "",
+            "saved_at": float(draft.get("saved_at") or 0),
+        }
+
+    def save_draft(self, key: str) -> dict:
+        """把当前（含未保存编辑）的块列表写进草稿文件。"""
+        doc = self.doc_payload(key)
+        entry = self.bridge_for(key).manifest.get(key)
+        chunks_path = Path(entry.jsonl)
+        if not chunks_path.is_file():
+            raise drafts.DraftError(f"正式切片文件不存在：{chunks_path}")
+        stem = self._stem_for(key)
+        baseline12 = drafts.sha12(chunks_path)
+        path = drafts.save_draft(
+            Path(self.cfg.data_root) / "draft", stem, baseline12, doc["chunks"]
+        )
+        self._drafts[key] = {
+            "stem": stem,
+            "path": path,
+            "baseline12": baseline12,
+            "saved_at": path.stat().st_mtime,
+            "stale": False,
+            "chunks": [dict(chunk) for chunk in doc["chunks"]],
+        }
+        self._dirty.discard(key)
+        return self.doc_payload(key)
+
+    def discard_draft(self, key: str) -> dict:
+        """删除草稿文件并回到基线（会话内编辑也一并丢弃）。"""
+        self._base_doc(key)
+        stem = self._stem_for(key)
+        drafts.discard_draft(Path(self.cfg.data_root) / "draft", stem)
+        self._drafts.pop(key, None)
+        self._ops.pop(key, None)
+        self._redo.pop(key, None)
+        self._dirty.discard(key)
+        return self.doc_payload(key)
+
+    def commit_draft(self, key: str) -> dict:
+        """提交草稿：校验基线 → 备份 → 原子覆盖 chunks.jsonl → 删草稿。"""
+        draft = self._active_draft(key)
+        if draft is None:
+            raise drafts.DraftError("没有可提交的草稿（先点保存草稿）")
+        entry = self.bridge_for(key).manifest.get(key)
+        chunks_path = Path(entry.jsonl)
+        saved = self.save_draft(key)  # 先把内存里的最新状态写进草稿
+        self._base_doc(key)
+        result = drafts.commit_draft(
+            chunks_path,
+            draft["path"],
+            Path(self.cfg.data_root) / "backup",
+            draft["stem"],
+        )
+        self.reload()
+        doc = self.doc_payload(key)
+        doc["committed"] = result
+        return doc
+
 
     # -- 对外 -----------------------------------------------------------
     @property
@@ -305,19 +434,22 @@ class Studio:
         return stats
 
     def doc_payload(self, key: str) -> dict:
-        """基线 + 会话内编辑命令重放后的三栏载荷。"""
+        """基线 / 草稿 + 会话内编辑命令重放后的三栏载荷。"""
         base = self._base_doc(key)
         ops = list(self._ops.get(key) or [])
         raw_lines = base.get("_raw_lines") or []
+        draft = self._active_draft(key)
+        if draft and draft.get("chunks"):
+            chunks = [dict(chunk) for chunk in draft["chunks"]]
+        else:
+            chunks = base["chunks"]
         if ops:
             chunks = apply_ops(
-                base["chunks"],
+                chunks,
                 ops,
                 law_name=base["law_name"],
                 source_lines=raw_lines,
             )
-        else:
-            chunks = base["chunks"]
         if self.cfg.auto_part:
             chunks = auto_part_chunks(
                 chunks,
@@ -330,7 +462,8 @@ class Studio:
         payload["chunks"] = chunks
         payload["stats"] = self._restat(chunks, base["stats"])
         payload["edited"] = False  # P3 覆盖层
-        payload["dirty"] = bool(ops)
+        payload["dirty"] = key in self._dirty
+        payload["draft"] = self.draft_payload(key)
         payload["diff"] = chunk_diff(base["chunks"], chunks)
         payload["edits"] = {
             "n_ops": len(ops),
@@ -396,9 +529,15 @@ class Studio:
             raise OpError("op 必须是 JSON 对象")
         base = self._base_doc(key)
         candidate = list(self._ops.get(key) or []) + [op]
-        apply_ops(base["chunks"], candidate, law_name=base["law_name"])  # 只做校验
+        draft = self._active_draft(key)
+        if draft and draft.get("chunks"):
+            start = [dict(chunk) for chunk in draft["chunks"]]
+        else:
+            start = base["chunks"]
+        apply_ops(start, candidate, law_name=base["law_name"])  # 只做校验
         self._ops[key] = candidate
         self._redo[key] = []
+        self._dirty.add(key)
         return self.doc_payload(key)
 
     def undo_op(self, key: str) -> dict:
@@ -409,6 +548,8 @@ class Studio:
         last = ops.pop()
         self._redo.setdefault(key, []).append(last)
         self._ops[key] = ops
+        if not ops:
+            self._dirty.discard(key)
         return self.doc_payload(key)
 
     def redo_op(self, key: str) -> dict:
@@ -419,6 +560,7 @@ class Studio:
         op = redo.pop()
         self._redo[key] = redo
         self._ops.setdefault(key, []).append(op)
+        self._dirty.add(key)
         return self.doc_payload(key)
 
     def reset_edits(self, key: str) -> dict:
@@ -426,4 +568,5 @@ class Studio:
         self._base_doc(key)  # 校验 key 存在
         self._ops.pop(key, None)
         self._redo.pop(key, None)
+        self._dirty.discard(key)
         return self.doc_payload(key)

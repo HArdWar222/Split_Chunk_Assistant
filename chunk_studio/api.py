@@ -11,7 +11,7 @@ import traceback
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __phase__, __version__
+from . import __phase__, __version__, drafts
 from .chunker import ChunkerError
 from .config import ConfigError
 from .manifest import ManifestError, SourceMissingError
@@ -62,6 +62,8 @@ class App:
         except OpError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
         except ConfigError as exc:
+            return _json({"ok": False, "error": str(exc)}, 400)
+        except drafts.DraftError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
         except ChunkerError as exc:
             return _json({"ok": False, "error": str(exc)}, 400)
@@ -167,6 +169,50 @@ class App:
             if path == "/api/redo":
                 return _json(self.studio.redo_op(key))
             return _json(self.studio.reset_edits(key))
+
+        if method == "POST" and path in {"/api/draft/save", "/api/draft/discard", "/api/draft/commit"}:
+            data = self._read_json(body)
+            key = str(data.get("key") or "").strip()
+            if not key:
+                raise ApiError(400, "缺少 key 参数")
+            try:
+                if path == "/api/draft/save":
+                    doc = self.studio.save_draft(key)
+                    return _json({**doc, "message": "草稿已保存"})
+                if path == "/api/draft/discard":
+                    doc = self.studio.discard_draft(key)
+                    return _json({**doc, "message": "已放弃草稿"})
+                doc = self.studio.commit_draft(key)
+                n = (doc.get("committed") or {}).get("n_chunks") or len(doc.get("chunks") or [])
+                return _json({**doc, "message": f"已提交 {n} 个切片"})
+            except SourceMissingError as exc:
+                raise ApiError(404, str(exc)) from None
+            except ManifestError as exc:
+                raise ApiError(404, str(exc)) from None
+
+        if method == "GET" and path == "/api/export":
+            key = (query.get("key") or [""])[0].strip()
+            if not key:
+                raise ApiError(400, "缺少 key 参数")
+            try:
+                doc = self.studio.doc_payload(key)
+            except SourceMissingError as exc:
+                raise ApiError(404, str(exc)) from None
+            except ManifestError as exc:
+                raise ApiError(404, str(exc)) from None
+            chunks = drafts.contract_chunks(doc.get("chunks") or [])
+            content = "".join(
+                json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks
+            )
+            filename = f"{doc.get('law_name') or 'chunks'}.chunks.jsonl"
+            return _json(
+                {
+                    "ok": True,
+                    "filename": filename,
+                    "n_chunks": len(chunks),
+                    "content": content,
+                }
+            )
 
         if method == "GET" and path in {"", "/", "/index.html"}:
             return self._static_file("index.html")
