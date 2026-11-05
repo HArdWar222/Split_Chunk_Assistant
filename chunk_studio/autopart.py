@@ -333,22 +333,32 @@ def _looks_like_heading(line: str) -> bool:
     return not _is_table_row_line(text)
 
 
-def _table_line_index(originals: list[dict] | None) -> dict[str, dict]:
-    """原始表格块索引：表格块正文的每一行 → 该块。
+def _table_origin_list(originals: list[dict] | None) -> list[dict]:
+    """按原始顺序取出所有表格块（面包屑、行区间、侧车都从这里找）。"""
+    return [c for c in (originals or []) if str(c.get("chunk_kind") or "") == "table"]
 
-    合并后正文里的表格行与原始表格块正文逐字一致（合并只是拼接），所以按行
-    建索引最可靠；不同表格的列名/字段各不相同（编号、工种、岗位信息……），
-    只靠 ``_is_table_row_line`` 的字段名单认不全。首行面包屑不参与索引。
+
+def _table_crumb(chunk: dict) -> str:
+    """表格块正文第一行就是它自己的面包屑（例如「现场管理类…台账 · 表3」）。"""
+    lines = str(chunk.get("chunk") or "").split("\n")
+    return lines[0].strip() if lines else ""
+
+
+def _table_line_index(originals: list[dict] | None) -> dict[str, list[tuple[int, dict]]]:
+    """原始表格块索引：正文每一行（去首行面包屑）→ [(顺序, 块)]。
+
+    同一行文本可能出现在多个表格块里（列名、编号行经常重复，例如两张表的
+    第一行都是「编号：类型」），所以这里保留**所有**候选并按原始块顺序排序；
+    匹配时用单调游标挑「当前表格块之后最近的那一个」，避免后面的表把前面
+    的行抢走（3010 的 表3/表4 互相串块就是这个问题）。
     """
-    index: dict[str, dict] = {}
-    for chunk in originals or []:
-        if str(chunk.get("chunk_kind") or "") != "table":
-            continue
+    index: dict[str, list[tuple[int, dict]]] = {}
+    for order, chunk in enumerate(_table_origin_list(originals)):
         body_lines = str(chunk.get("chunk") or "").split("\n")
         for line in body_lines[1:]:
             key = _norm_line(line)
             if key:
-                index.setdefault(key, chunk)
+                index.setdefault(key, []).append((order, chunk))
     return index
 
 
@@ -395,37 +405,76 @@ def split_mixed_chunk(
     if not lines:
         return None
 
+    origin_tables = _table_origin_list(originals)
     line_index = _table_line_index(originals)
+    origin_index = _table_origin_index(originals)
+    crumbs = {_norm_line(_table_crumb(c)) for c in origin_tables if _table_crumb(c)}
+    # 面包屑 → 原始表格块：合并正文里每个表格块的正文开头都带一遍自己的
+    # 面包屑，用它来「换表」最可靠；靠行内容猜测会撞上多张表开头完全相同的
+    # 行（3010 的表1/表2、表3/表4 都是「风险点：… · 编号：类型」）。
+    crumb_map: dict[str, list[dict]] = {}
+    for info in origin_tables:
+        crumb = _table_crumb(info)
+        if crumb:
+            crumb_map.setdefault(_norm_line(crumb), []).append(info)
+    crumb_cursor: dict[str, int] = {}
+
     header: list[str] = []
     rest: list[str] = []
     for line in lines:
         text = line.strip()
-        known_row = bool(line_index.get(_norm_line(text)))
-        if not rest and not known_row and _looks_like_heading(text):
+        norm = _norm_line(text)
+        known_row = norm in line_index or _is_table_row_line(text)
+        if not rest and not known_row and norm not in crumbs and _looks_like_heading(text):
             header.append(text)
             continue
         rest.append(line)
     if not rest:
         return None
 
-    segments: list[tuple[str, list[str]]] = []
+    groups: list[dict] = []
+    cur_info: dict | None = None
     for line in rest:
-        # 合并时每个表格块的正文开头都带一遍自己的面包屑（与 header 末行相同），
-        # 这些重复行不参与分段，否则会被当成「文本段」多分出一块。
-        if header and line.strip() == header[-1].strip():
+        text = line.strip()
+        norm = _norm_line(text)
+        if not text:
             continue
-        is_row = bool(line_index.get(_norm_line(line))) or _is_table_row_line(line)
-        if is_row or (segments and segments[-1][0] == "table"):
-            # 已知表格行；或紧跟在表格行之后的续行（例如「注1:…」），
-            # 它们属于同一个原始表格块，不能当文本段。
+        info_list = crumb_map.get(norm)
+        if info_list:
+            # 面包屑是结构行：只用来切换「当前是哪张表」，不进入正文。
+            # 同一张表被拆成多个块时（行区间不同、面包屑相同），按出现
+            # 顺序依次对应原来的块。
+            index_in_list = crumb_cursor.get(norm, 0)
+            cur_info = info_list[min(index_in_list, len(info_list) - 1)]
+            crumb_cursor[norm] = index_in_list + 1
+            continue
+        is_row = norm in line_index or _is_table_row_line(text) or norm in origin_index
+        continuation = (
+            bool(groups)
+            and groups[-1]["kind"] == "table"
+            and not _looks_like_heading(text)
+        )
+        if is_row or continuation:
+            # 已知表格行；或紧跟在表格行之后的续行（例如「注1:…」「……」），
+            # 它们属于当前表格块；但「附录 D」这种标题行必须断开，否则会被
+            # 粘进上一张表的正文里。
             kind = "table"
+            row_info = cur_info
         else:
             kind = "text"
-        if segments and segments[-1][0] == kind:
-            segments[-1][1].append(line)
+            row_info = None
+        if (
+            groups
+            and groups[-1]["kind"] == kind
+            and (kind != "table" or groups[-1]["info"] is row_info)
+        ):
+            groups[-1]["lines"].append(text)
         else:
-            segments.append((kind, [line]))
-    kinds = {kind for kind, _ in segments}
+            groups.append({"kind": kind, "info": row_info, "lines": [text]})
+    if not groups:
+        return None
+
+    kinds = {group["kind"] for group in groups}
     header_seg_inserted = False
     if len(kinds) < 2:
         # 合并块的「段落部分」可能只有标题/面包屑（例如段落块正文就是
@@ -433,10 +482,13 @@ def split_mixed_chunk(
         # 这时把 header 补成一个段落段，仍按类型边界拆。
         if str(chunk.get("chunk_kind") or "") == "table" or not header:
             return None
-        segments.insert(0, ("text", list(header)))
+    if header and (len(kinds) < 2 or groups[0]["kind"] == "table"):
+        # header 是合并块最前面的标题/面包屑；如果第一段就是表格（例如
+        # 「附录A + 表1」合并），必须先把 header 发成一个段落块，否则标题
+        # 会被整个丢掉。
+        groups.insert(0, {"kind": "text", "info": None, "lines": list(header)})
         header_seg_inserted = True
 
-    origin_index = _table_origin_index(originals)
     used = {str(c.get("id")) for c in chunks}
     seq = max_seq(chunks)
     out: list[dict] = []
@@ -452,7 +504,9 @@ def split_mixed_chunk(
         return candidate
 
     first = True
-    for kind, seg_lines in segments:
+    for group in groups:
+        kind = group["kind"]
+        seg_lines = group["lines"]
         if kind == "text":
             text = "\n".join(seg_lines)
             if first and header and not header_seg_inserted:
@@ -476,56 +530,50 @@ def split_mixed_chunk(
             first = False
             continue
 
-        crumb = header[-1] if header else ""
-        # 连续的行若来自同一个原始表格块，就合成一个表格块（保留该块的
-        # 表号行区间与 table_grid），而不是每行都切出一个块。
-        groups: list[tuple[dict | None, list[str]]] = []
-        for row_line in seg_lines:
-            info = line_index.get(_norm_line(row_line)) or origin_index.get(_norm_line(row_line))
-            if groups and (info is groups[-1][0] or info is None):
-                groups[-1][1].append(row_line)
-            else:
-                groups.append((info, [row_line]))
-        for info, row_lines in groups:
-            item = _copy(chunk)
-            item["id"] = str(chunk.get("id") or "") if first else take_id()
-            item["chunk_kind"] = "table"
-            item["part_index"] = 1
-            item["part_total"] = 1
-            lines_out: list[str] = []
-            for row in row_lines:
-                text_row = row.strip()
-                if crumb and text_row.startswith(crumb):
-                    # 有些表格块把面包屑写进了行正文（「工作表格 · 表A.3 … · 注1:…」），
-                    # 表格段自己已经补了面包屑，这里去掉重复的一段。
-                    text_row = text_row[len(crumb):].lstrip()
-                    if text_row.startswith("·"):
-                        text_row = text_row.lstrip("·").strip()
-                if text_row:
-                    lines_out.append(text_row)
-            text = (crumb + "\n" if crumb else "") + "\n".join(lines_out)
-            _derive(item, text=text)
-            item["manual"] = True
-            if info:
-                item["law_num"] = str(info.get("law_num") or "")
-                item["span"] = list(info["span"]) if info.get("span") else None
-                item["align"] = info.get("align") or "approx"
-                origin_extras = info.get("extras") if isinstance(info.get("extras"), dict) else {}
-                extras = dict(item.get("extras") or {})
-                for key in ("table_grid", "table_label", "table_title", "table_rows", "table_mode"):
-                    if key in origin_extras:
-                        extras[key] = origin_extras[key]
-                origin_id = str(info.get("id") or "")
-                if grids and origin_id in grids:
-                    # table_grid 不随基线块下发（体积大），由 Studio 单独传入。
-                    extras["table_grid"] = grids[origin_id]
-                item["extras"] = extras
-            else:
-                item["law_num"] = str(chunk.get("law_num") or "")
-                item["span"] = list(chunk["span"]) if chunk.get("span") else None
-                item["align"] = "approx"
-            out.append(item)
-            first = False
+        # 表格段：每个 group 对应一个原始表格块（同块连续行已在分段时合并）。
+        info = group["info"]
+        # 每个表格块用**它自己**的面包屑（而不是合并块 header 的末行），
+        # 否则 表3/表4 会互相戴错表名（3010 的问题）。
+        crumb = _table_crumb(info) if info else (header[-1] if header else "")
+        item = _copy(chunk)
+        item["id"] = str(chunk.get("id") or "") if first else take_id()
+        item["chunk_kind"] = "table"
+        item["part_index"] = 1
+        item["part_total"] = 1
+        lines_out: list[str] = []
+        for row in seg_lines:
+            text_row = row.strip()
+            if crumb and text_row.startswith(crumb):
+                # 有些表格块把面包屑写进了行正文（「工作表格 · 表A.3 … · 注1:…」），
+                # 表格段自己已经补了面包屑，这里去掉重复的一段。
+                text_row = text_row[len(crumb):].lstrip()
+                if text_row.startswith("·"):
+                    text_row = text_row.lstrip("·").strip()
+            if text_row:
+                lines_out.append(text_row)
+        text = (crumb + "\n" if crumb else "") + "\n".join(lines_out)
+        _derive(item, text=text)
+        item["manual"] = True
+        if info:
+            item["law_num"] = str(info.get("law_num") or "")
+            item["span"] = list(info["span"]) if info.get("span") else None
+            item["align"] = info.get("align") or "approx"
+            origin_extras = info.get("extras") if isinstance(info.get("extras"), dict) else {}
+            extras = dict(item.get("extras") or {})
+            for key in ("table_grid", "table_label", "table_title", "table_rows", "table_mode"):
+                if key in origin_extras:
+                    extras[key] = origin_extras[key]
+            origin_id = str(info.get("id") or "")
+            if grids and origin_id in grids:
+                # table_grid 不随基线块下发（体积大），由 Studio 单独传入。
+                extras["table_grid"] = grids[origin_id]
+            item["extras"] = extras
+        else:
+            item["law_num"] = str(chunk.get("law_num") or "")
+            item["span"] = list(chunk["span"]) if chunk.get("span") else None
+            item["align"] = "approx"
+        out.append(item)
+        first = False
 
     return out if len(out) >= 2 else None
 

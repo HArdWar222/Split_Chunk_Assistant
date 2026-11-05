@@ -327,6 +327,65 @@ class MixedMaterializeTest(unittest.TestCase):
         self.assertIn(rows_a[1], out[1]["chunk"])
         self.assertEqual(out[1]["extras"]["table_grid"], grid_a)
 
+    def test_repeated_rows_choose_origin_table_in_order(self):
+        """两张表开头几行内容完全相同时，表格行必须按原始顺序解析到各自的表。"""
+        row_risk = "风险点：排查内容与排查标准"
+        row_type = "编号：类型"
+        crumb_a = "现场管理类隐患排查治理清单 · 表1"
+        crumb_b = "基础管理类隐患排查台账 · 表2"
+        originals = [
+            make_chunk(
+                "测试法-0080",
+                crumb_a + "\n" + row_risk + "\n" + row_type,
+                law_num="表1 第1-2行",
+                kind="table",
+                span=[20, 20],
+            ),
+            make_chunk(
+                "测试法-0081",
+                crumb_b + "\n" + row_risk + "\n" + row_type,
+                law_num="表2 第1-2行",
+                kind="table",
+                span=[24, 24],
+            ),
+        ]
+        merged = make_chunk(
+            "测试法-0090",
+            "\n".join(
+                [
+                    "附录 A",
+                    "(资料性附录)",
+                    "现场管理类隐患排查治理清单",
+                    crumb_a,
+                    row_risk,
+                    row_type,
+                    crumb_b,
+                    row_risk,
+                    row_type,
+                ]
+            ),
+            law_num="段90",
+            kind="paragraph",
+            span=[19, 24],
+        )
+        merged["manual"] = True
+        merged["align"] = "approx"
+
+        out = materialize_chunks([merged], max_chars=60, min_chars=20, originals=originals)
+        self.assertEqual([item["chunk_kind"] for item in out], ["paragraph", "table", "table"])
+        # 开头的标题/面包屑成段，且不把第一张表的面包屑吃进去
+        self.assertEqual(
+            out[0]["chunk"],
+            "附录 A\n(资料性附录)\n现场管理类隐患排查治理清单",
+        )
+        self.assertEqual(out[1]["law_num"], "表1 第1-2行")
+        self.assertEqual(out[2]["law_num"], "表2 第1-2行")
+        self.assertTrue(out[1]["chunk"].startswith(crumb_a + "\n"))
+        self.assertTrue(out[2]["chunk"].startswith(crumb_b + "\n"))
+        # 表格块正文不得混入标题行
+        for item in out[1:]:
+            self.assertNotIn("附录 A", item["chunk"])
+
     def test_pure_table_unchanged_by_mixed_logic(self):
         rows = [
             f"工种：岗位信息{number} · 爆破工(示例)：岗位职责 · 履责要求：示例{number}"
