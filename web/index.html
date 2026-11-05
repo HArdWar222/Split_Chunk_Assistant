@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -13,203 +13,210 @@
       <h1>SplitChunkAssistant</h1>
       <span class="phase" id="phase">P1</span>
     </div>
-    <div class="status" id="status">鍔犺浇涓€?/div>
+    <div class="status" id="status">加载中…</div>
     <div class="edit-tools">
       <span class="draft-badge" id="draft-badge" hidden></span>
-      <span class="dirty" id="dirty" hidden>鈼?鏈繚瀛?/span>
-      <span class="diff" id="diff" title="鐩稿鑷姩鍒囧潡鍩虹嚎锛? 鏂板 ~ 淇敼 - 鍒犻櫎">+0 ~0 -0</span>
-      <button id="btn-undo" type="button" class="btn" title="鎾ら攢锛圕trl+Z锛? disabled>鈫?鎾ら攢</button>
-      <button id="btn-redo" type="button" class="btn" title="閲嶅仛锛圕trl+Shift+Z锛? disabled>鈫?閲嶅仛</button>
+      <span class="dirty" id="dirty" hidden>● 未保存</span>
+      <span class="diff" id="diff" title="相对自动切块基线：+ 新增 ~ 修改 - 删除">+0 ~0 -0</span>
+      <button id="btn-undo" type="button" class="btn" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
+      <button id="btn-redo" type="button" class="btn" title="重做（Ctrl+Shift+Z）" disabled>↷ 重做</button>
     </div>
     <div class="actions">
       <span class="watch-chip" id="watch-chip" hidden></span>
-      <button id="btn-save-draft" type="button" class="btn" title="鎶婂綋鍓嶇紪杈戝瓨鎴愯崏绋匡紙Ctrl+S锛夛紝绋嶅悗鍐嶅洖鏉ョ户缁?>淇濆瓨鑽夌</button>
-      <button id="btn-commit" type="button" class="btn btn-primary" title="鎻愪氦鑽夌锛氭牎楠屽熀绾?鈫?澶囦唤 鈫?瑕嗙洊姝ｅ紡 chunks.jsonl" disabled>鎻愪氦</button>
-      <button id="btn-discard" type="button" class="btn" title="鏀惧純鑽夌锛屽洖鍒拌嚜鍔ㄥ垏鍧楀熀绾? disabled>鏀惧純</button>
-      <button id="btn-export" type="button" class="btn" title="瀵煎嚭褰撳墠锛堝惈鏈彁浜や慨鏀癸級鐨?chunks.jsonl" disabled>瀵煎嚭</button>
-      <button id="btn-chunk" type="button" class="btn" title="鎵弿 data/source 閲岃繕娌″垏鍧楃殑鏂囦欢骞惰皟鐢?SPLITCHUNK 鍒囧潡">鈿?鍒囧潡</button>
-      <button id="btn-refresh" type="button" class="btn">鍒锋柊</button>
-      <button id="btn-settings" type="button" class="btn">鈿?璁剧疆</button>
+      <button id="btn-save-draft" type="button" class="btn" title="把当前编辑存成草稿（Ctrl+S），稍后再回来继续">保存草稿</button>
+      <button id="btn-commit" type="button" class="btn btn-primary" title="提交草稿：校验基线 → 备份 → 覆盖正式 chunks.jsonl" disabled>提交</button>
+      <button id="btn-discard" type="button" class="btn" title="放弃草稿，回到自动切块基线" disabled>放弃</button>
+      <button id="btn-export" type="button" class="btn" title="导出当前（含未提交修改）的 chunks.jsonl" disabled>导出</button>
+      <button id="btn-chunk" type="button" class="btn" title="扫描 data/source 里还没切块的文件并调用 SPLITCHUNK 切块">⚙ 切块</button>
+      <button id="btn-refresh" type="button" class="btn">刷新</button>
+      <button id="btn-settings" type="button" class="btn">⚙ 设置</button>
     </div>
   </header>
 
   <main class="layout">
-    <aside class="sidebar" aria-label="鏂囦欢鍒楄〃" id="sidebar">
+    <aside class="sidebar" aria-label="文件列表" id="sidebar">
       <div class="search-row">
-        <input id="search" type="search" placeholder="鎼滅储娉曡鍚?/ 鍒嗙粍鈥? autocomplete="off" aria-label="鎼滅储娉曡">
-        <button id="btn-upload" class="btn btn-upload" type="button" title="鎵归噺瀵煎叆鍘熸枃浠讹紙.md / .markdown / .txt锛屽啓鍏?data/source锛?>猬?娣诲姞鏂囦欢</button>
+        <input id="search" type="search" placeholder="搜索法规名 / 分组…" autocomplete="off" aria-label="搜索法规">
+        <button id="btn-upload" class="btn btn-upload" type="button" title="批量导入原文件（.md / .markdown / .txt，写入 data/source）">⬆ 添加文件</button>
         <input id="file-input" type="file" multiple accept=".md,.markdown,.txt" hidden>
       </div>
-      <div class="drop-hint" id="drop-hint" hidden>鏉惧紑瀵煎叆鍒?data/source</div>
+      <div class="drop-hint" id="drop-hint" hidden>松开导入到 data/source</div>
       <div class="stats" id="stats"></div>
-      <nav class="tree" id="tree" aria-label="鏂囦欢鍒楄〃"></nav>
+      <nav class="tree" id="tree" aria-label="文件列表"></nav>
     </aside>
 
-    <section class="source-pane" aria-label="鍘熸枃">
+    <section class="source-pane" aria-label="原文">
       <header class="pane-head">
-        <div class="pane-title" id="source-title">鍘熸枃</div>
-        <div class="pane-meta" id="source-meta">閫夋嫨宸︿晶鏂囦欢寮€濮?/div>
-        <label class="lane-toggle" title="鎶婃瘡涓垏鐗囪鐩栫殑鍘熸枃琛岃寖鍥寸敾鎴愬乏渚х珫鏉★紙鐐瑰嚮绔栨潯鍙€変腑鍒囩墖锛?>
-          <input type="checkbox" id="toggle-lanes" checked> 鑼冨洿鏉?        </label>
+        <div class="pane-title" id="source-title">原文</div>
+        <div class="pane-meta" id="source-meta">选择左侧文件开始</div>
+        <label class="lane-toggle" title="把每个切片覆盖的原文行范围画成左侧竖条（点击竖条可选中切片）">
+          <input type="checkbox" id="toggle-lanes" checked> 范围条
+        </label>
       </header>
       <div class="source-tip" id="source-tip">
-        鍦ㄥ師鏂?b>鐐逛竴涓?/b>浼氬嚭鐜拌摑鑹叉媶鍒嗗厜鏍囷紙涓婃柟鎻愮ず鍙媶琛?瀛楃锛夛紱<b>鍙抽敭</b>鍗冲彲缂栬緫姝ゅ垏鐗?b>姝ｆ枃/鏉″彿</b>銆佹媶鍒嗐€佸悎骞躲€佸垹闄ゃ€佹柊澧烇紱鍙抽敭钀藉湪鏍囬/鐩綍绛夋病鏈夊垏鐗囩殑琛岋紝涔熷彲浠ャ€岀敤杩欎竴琛屾柊澧炲垏鐗囥€嶃€?      </div>
+        在原文<b>点一下</b>会出现蓝色拆分光标（上方提示可拆行/字符）；<b>右键</b>即可编辑此切片<b>正文/条号</b>、拆分、合并、删除、新增；右键落在标题/目录等没有切片的行，也可以「用这一行新增切片」。
+      </div>
       <div class="source" id="source">
         <div class="empty">
-          <h2>鍘熸枃 鈫?鍒囩墖</h2>
-          <p>鐐瑰嚮宸︿晶浠绘剰涓€浠芥枃浠讹紝杩欓噷浼氭樉绀?Markdown 鍘熸枃琛岋紱鍙虫爮鏄嚜鍔ㄥ垏濂界殑鍒囩墖銆?             <b>鎮仠</b>浠讳竴渚ч兘浼氶珮浜彟涓€渚у搴旂殑鍖哄煙锛?             <b>鍦ㄥ師鏂囬噷鎷栭€変竴娈垫枃瀛?/b>锛屽彸渚ц鐩栬鑼冨洿鐨勫垏鐗囦細琚珮浜紱
-             宸︿晶<b>褰╄壊绔栨潯</b>鏄瘡涓垏鐗囪鐩栫殑琛岃寖鍥达紙鎮仠鐪嬪垏鐗?id锛岀偣鍑婚€変腑锛夈€?/p>
+          <h2>原文 ↔ 切片</h2>
+          <p>点击左侧任意一份文件，这里会显示 Markdown 原文行；右栏是自动切好的切片。
+             <b>悬停</b>任一侧都会高亮另一侧对应的区域；
+             <b>在原文里拖选一段文字</b>，右侧覆盖该范围的切片会被高亮；
+             左侧<b>彩色竖条</b>是每个切片覆盖的行范围（悬停看切片 id，点击选中）。</p>
         </div>
       </div>
     </section>
 
-    <section class="chunks-pane" aria-label="鍒囩墖">
+    <section class="chunks-pane" aria-label="切片">
       <header class="pane-head">
-        <div class="pane-title">鍒囩墖 <span class="count" id="chunk-count"></span></div>
+        <div class="pane-title">切片 <span class="count" id="chunk-count"></span></div>
         <div class="pane-meta" id="chunk-meta"></div>
         <div class="pane-actions">
-          <button id="btn-add" type="button" class="btn btn-small" title="鍦ㄩ€変腑鍒囩墖涔嬪悗鏂板涓€鍧楋紙Ctrl+Shift+N锛?>锛?鏂板</button>
-          <button id="btn-reset" type="button" class="btn btn-small" title="涓㈠純鏈枃浠剁殑鍏ㄩ儴鎵嬪伐淇敼锛屽洖鍒拌嚜鍔ㄥ垏鍧楃粨鏋?>鈫?閲嶇疆</button>
+          <button id="btn-add" type="button" class="btn btn-small" title="在选中切片之后新增一块（Ctrl+Shift+N）">＋ 新增</button>
+          <button id="btn-reset" type="button" class="btn btn-small" title="丢弃本文件的全部手工修改，回到自动切块结果">↺ 重置</button>
         </div>
       </header>
       <div class="chunks-hint" id="chunks-hint" hidden>
-        鎵嬪伐淇敼鍙湪鍐呭瓨閲岋紙鍒锋柊椤甸潰涓嶄涪锛屽叧鏈嶅姟鎵嶄涪锛夛紱P3 鎵嶈惤鐩樸€侰trl+Z 鍙挙閿€銆?      </div>
+        手工修改只在内存里（刷新页面不丢，关服务才丢）；P3 才落盘。Ctrl+Z 可撤销。
+      </div>
       <div class="chunks" id="chunks">
-        <div class="empty"><p>灏氭湭閫夋嫨鏂囦欢銆?/p></div>
+        <div class="empty"><p>尚未选择文件。</p></div>
       </div>
     </section>
   </main>
 
   <dialog id="settings-dialog" class="dialog">
     <form method="dialog" id="settings-form">
-      <h2>鈿?璁剧疆</h2>
-      <p class="hint">鍞竴鏁版嵁婧愭槸鏈湴銆屼袱鐩綍銆嶇洰褰曪細<code>source/</code> 鏀惧師鏂囦欢锛堝彲甯﹀瓙鐩綍鍒嗙粍锛夛紝
-        <code>chunks/</code> 鏀惧悓鍚?<code>.chunks.jsonl</code>锛堝彲閫夊悓鍚?<code>.extras.jsonl</code>锛夈€?        淇敼鍚庝繚瀛樼珛鍗崇敓鏁堬紙鏃犻渶閲嶅惎锛夈€?/p>
+      <h2>⚙ 设置</h2>
+      <p class="hint">唯一数据源是本地「两目录」目录：<code>source/</code> 放原文件（可带子目录分组），
+        <code>chunks/</code> 放同名 <code>.chunks.jsonl</code>（可选同名 <code>.extras.jsonl</code>）。
+        修改后保存立即生效（无需重启）。</p>
 
       <label class="field">
-        <span>鏈湴鏁版嵁鐩綍 <code>data_root</code>锛堜笅鍚?<code>source/</code> 涓?<code>chunks/</code>锛?/span>
-        <input id="cfg-data-root" type="text" placeholder="渚嬪 data 鎴?D:\chunk-data" spellcheck="false">
+        <span>本地数据目录 <code>data_root</code>（下含 <code>source/</code> 与 <code>chunks/</code>）</span>
+        <input id="cfg-data-root" type="text" placeholder="例如 data 或 D:\chunk-data" spellcheck="false">
       </label>
 
       <label class="field">
-        <span>绔彛 <code>port</code>锛堥噸鍚悗鐢熸晥锛?/span>
+        <span>端口 <code>port</code>（重启后生效）</span>
         <input id="cfg-port" type="number" min="1" max="65535">
       </label>
 
       <label class="field inline-field">
-        <span>鑷姩鍒?part <code>auto_part</code>锛堣秴杩囬槇鍊肩殑鍒囩墖鍦ㄥ姞杞芥椂鑷姩鎷嗗垎锛涜〃鏍煎彧鎸夎鍖洪棿鎷嗭級</span>
+        <span>自动分 part <code>auto_part</code>（超过阈值的切片在加载时自动拆分；表格只按行区间拆）</span>
         <input id="cfg-auto-part" type="checkbox">
       </label>
 
       <label class="field">
-        <span>鑷姩鎷嗗垎闃堝€?<code>max_chars</code>锛堥粯璁?800锛屸墺200锛?/span>
+        <span>自动拆分阈值 <code>max_chars</code>（默认 800，≥200）</span>
         <input id="cfg-max-chars" type="number" min="200" step="50">
       </label>
 
       <label class="field">
-        <span>鏈€灏?part 闀垮害 <code>min_part_chars</code>锛堥粯璁?200锛屼粎鏂囨湰 part 鐢級</span>
+        <span>最小 part 长度 <code>min_part_chars</code>（默认 200，仅文本 part 用）</span>
         <input id="cfg-min-part-chars" type="number" min="1">
       </label>
 
       <label class="field inline-field">
-        <span>鑷姩鍒囧潡 <code>auto_chunk</code>锛堟帰娴嬪埌 source 閲屾柊鏂囦欢灏辩敤 SPLITCHUNK 鍒囧潡锛?/span>
+        <span>自动切块 <code>auto_chunk</code>（探测到 source 里新文件就用 SPLITCHUNK 切块）</span>
         <input id="cfg-auto-chunk" type="checkbox">
       </label>
 
       <label class="field">
-        <span>鍒囧潡寮曟搸鐩綍 <code>chunker_root</code>锛堢暀绌?鑷姩鎵?vendor/splitchunk锛?/span>
-        <input id="cfg-chunker-root" type="text" placeholder="鐣欑┖鑷姩鎺㈡祴" spellcheck="false">
+        <span>切块引擎目录 <code>chunker_root</code>（留空=自动找 vendor/splitchunk）</span>
+        <input id="cfg-chunker-root" type="text" placeholder="留空自动探测" spellcheck="false">
       </label>
 
       <label class="field">
-        <span>杞闂撮殧 <code>chunker_poll</code>锛堢锛?鈥?0锛岄粯璁?3锛?/span>
+        <span>轮询间隔 <code>chunker_poll</code>（秒，1–60，默认 3）</span>
         <input id="cfg-chunker-poll" type="number" min="1" max="60">
       </label>
 
       <div class="dialog-errors" id="cfg-errors" hidden></div>
 
       <div class="dialog-actions">
-        <button type="button" id="btn-cancel" class="btn">鍙栨秷</button>
-        <button type="submit" id="btn-save" class="btn btn-primary">淇濆瓨</button>
+        <button type="button" id="btn-cancel" class="btn">取消</button>
+        <button type="submit" id="btn-save" class="btn btn-primary">保存</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="split-dialog" class="dialog op-dialog">
     <form method="dialog" id="split-form">
-      <h2>鉁?鎷嗗垎鍒囩墖</h2>
-      <p class="hint">閫夋嫨鍦?b>鍝竴琛屼箣鍓?/b>鍒囧紑锛氫笂鍗婂潡淇濈暀鍘?id 涓庡師鏉″彿锛屼笅鍗婂潡鑾峰緱鏂?id锛坢ax_seq+1锛夈€?        鍗曡鍧楁寜瀛楃浣嶇疆鎷嗐€傛媶瀹岃嫢涓嬪崐鍧楁潯鍙蜂笉鍚岋紝鍙湪涓嬮潰鐩存帴濉紝鎴栦箣鍚庣敤銆屾敼銆嶉€愪釜鏀广€?/p>
+      <h2>✂ 拆分切片</h2>
+      <p class="hint">选择在<b>哪一行之前</b>切开：上半块保留原 id 与原条号，下半块获得新 id（max_seq+1）。
+        单行块按字符位置拆。拆完若下半块条号不同，可在下面直接填，或之后用「改」逐个改。</p>
       <div class="op-target" id="split-target"></div>
       <div class="split-lines" id="split-lines"></div>
       <label class="field" id="split-char-row" hidden>
-        <span>鍒囧垎瀛楃浣嶇疆 <code>at_char</code>锛? ~ 姝ｆ枃闀垮害-1锛?/span>
+        <span>切分字符位置 <code>at_char</code>（1 ~ 正文长度-1）</span>
         <input id="split-char" type="number" min="1" step="1">
       </label>
       <label class="field">
-        <span>涓嬪崐鍧楁潯鍙?<code>law_num</code>锛堝彲閫夛紱鐣欑┖浼氳嚜鍔ㄨ瘑鍒垏鐐瑰鐨勬潯鍙枫€岀X鏉°€嶆垨銆?.4.1銆嶏紝璇嗗埆涓嶅埌鍒欑户鎵垮師鍧楋級</span>
-        <input id="split-law-num" type="text" spellcheck="false" placeholder="渚嬪锛氱浜屾潯 鎴?5.2.1">
+        <span>下半块条号 <code>law_num</code>（可选；留空会自动识别切点处的条号「第X条」或「5.4.1」，识别不到则继承原块）</span>
+        <input id="split-law-num" type="text" spellcheck="false" placeholder="例如：第二条 或 5.2.1">
       </label>
       <div class="dialog-errors" id="split-errors" hidden></div>
       <div class="dialog-actions">
-        <button type="button" class="btn btn-cancel-op">鍙栨秷</button>
-        <button type="submit" id="btn-split-ok" class="btn btn-primary">纭鎷嗗垎</button>
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-split-ok" class="btn btn-primary">确认拆分</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="edit-dialog" class="dialog op-dialog">
     <form method="dialog" id="edit-form">
-      <h2>鉁?缂栬緫鍒囩墖</h2>
-      <p class="hint">鏀规鏂囦細閲嶇畻 <code>token_len</code> / <code>chunk_hash</code> 骞舵爣璁?manual锛屼笌鍘熸枃鍖洪棿鑴遍挬銆?/p>
+      <h2>✎ 编辑切片</h2>
+      <p class="hint">改正文会重算 <code>token_len</code> / <code>chunk_hash</code> 并标记 manual，与原文区间脱钩。</p>
       <div class="op-target" id="edit-target"></div>
       <label class="field">
-        <span>姝ｆ枃 <code>chunk</code></span>
+        <span>正文 <code>chunk</code></span>
         <textarea id="edit-text" rows="10" spellcheck="false"></textarea>
       </label>
       <label class="field">
-        <span>鏉″彿 / 琛ㄥ彿 <code>law_num</code></span>
+        <span>条号 / 表号 <code>law_num</code></span>
         <input id="edit-law-num" type="text" spellcheck="false">
       </label>
       <label class="field">
-        <span>绫诲瀷 <code>chunk_kind</code></span>
+        <span>类型 <code>chunk_kind</code></span>
         <select id="edit-kind"></select>
       </label>
       <div class="dialog-errors" id="edit-errors" hidden></div>
       <div class="dialog-actions">
-        <button type="button" class="btn btn-cancel-op">鍙栨秷</button>
-        <button type="submit" id="btn-edit-ok" class="btn btn-primary">淇濆瓨淇敼</button>
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-edit-ok" class="btn btn-primary">保存修改</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="add-dialog" class="dialog op-dialog">
     <form method="dialog" id="add-form">
-      <h2 id="add-title">锛?鏂板鍒囩墖</h2>
-      <p class="hint" id="add-desc">鍦ㄥ師鏂囬噷鎷栭€変竴娈垫枃瀛楀悗鐐广€屾柊澧炪€嶏紝閫夊尯浼氱洿鎺ュ彉鎴愬垏鐗囧苟璁板綍琛屽尯闂达紱鏈€夊尯鏃舵墜鍔ㄨ緭鍏ユ鏂囷紝鎻掑叆鍒板綋鍓嶉€変腑鍒囩墖涔嬪悗锛堟湭閫変腑鍒欒拷鍔犳湯灏撅級锛宨d = 褰撳墠鏈€澶?seq+1銆?/p>
+      <h2 id="add-title">＋ 新增切片</h2>
+      <p class="hint" id="add-desc">在原文里拖选一段文字后点「新增」，选区会直接变成切片并记录行区间；未选区时手动输入正文，插入到当前选中切片之后（未选中则追加末尾），id = 当前最大 seq+1。</p>
       <p class="op-hint" id="add-hint" hidden></p>
       <label class="field">
-        <span>姝ｆ枃 <code>chunk</code></span>
-        <textarea id="add-text" rows="8" spellcheck="false" placeholder="绮樿创鎴栬緭鍏ヨ鏂板鐨勫潡姝ｆ枃鈥?></textarea>
+        <span>正文 <code>chunk</code></span>
+        <textarea id="add-text" rows="8" spellcheck="false" placeholder="粘贴或输入要新增的块正文…"></textarea>
       </label>
       <label class="field">
-        <span>鏉″彿 / 琛ㄥ彿 <code>law_num</code></span>
-        <input id="add-law-num" type="text" spellcheck="false" placeholder="鐣欑┖鍒欏～銆岋紙鏂板锛夈€?>
+        <span>条号 / 表号 <code>law_num</code></span>
+        <input id="add-law-num" type="text" spellcheck="false" placeholder="留空则填「（新增）」">
       </label>
       <label class="field">
-        <span>绫诲瀷 <code>chunk_kind</code></span>
+        <span>类型 <code>chunk_kind</code></span>
         <select id="add-kind"></select>
       </label>
       <div class="dialog-errors" id="add-errors" hidden></div>
       <div class="dialog-actions">
-        <button type="button" class="btn btn-cancel-op">鍙栨秷</button>
-        <button type="submit" id="btn-add-ok" class="btn btn-primary">鏂板</button>
+        <button type="button" class="btn btn-cancel-op">取消</button>
+        <button type="submit" id="btn-add-ok" class="btn btn-primary">新增</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="choice-dialog" class="dialog op-dialog choice-dialog">
     <form method="dialog">
-      <h2 id="choice-title">璇烽€夋嫨</h2>
+      <h2 id="choice-title">请选择</h2>
       <p class="hint" id="choice-text"></p>
       <div class="choice-actions" id="choice-actions"></div>
     </form>
@@ -218,7 +225,7 @@
   <div id="toast" class="toast" hidden></div>
   <div id="split-caret" class="split-caret" hidden aria-hidden="true"></div>
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
-  <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="鍒囩墖鎿嶄綔" hidden></div>
+  <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
   <script src="/static/app.js?v=0.3.33-p3g" defer></script>
 </body>
