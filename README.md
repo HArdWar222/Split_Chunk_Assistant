@@ -3,6 +3,8 @@
 > **RAG 切块的可视化人工切片工作台** —— 自动切完能看、能改、能存、能导出。
 >
 > 👉 **第一次用？先读 [使用说明（傻瓜版）](docs/09-user-guide.md)** —— 从启动、导入、切块、编辑到提交，一步一步照着做。
+>
+> 📦 **要打包成 exe / 安装包？看 [打包与安装](docs/10-packaging.md)** —— PyInstaller 目录版 + Inno Setup 安装脚本、数据位置与常见问题。
 
 给本地 `data/source`（原件）+ `data/chunks`（切片产物）两目录挂一个本地网页工作台，切块由 SPLITCHUNK 引擎自动完成：
 原文（Markdown）与切片（chunk）双向联动，支持人工 `split / merge / drop / add / 扩展 / 并入 / 改字`，
