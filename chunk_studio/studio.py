@@ -172,14 +172,21 @@ class Studio:
         if draft is None:
             return {"exists": False, "stale": False, "baseline12": "", "saved_at": 0}
         return {
-            "exists": bool(draft.get("chunks")),
+            # 只要磁盘上有新鲜草稿就算存在（chunks 只是会话重放起点，保存后不再替换）
+            "exists": not bool(draft.get("stale")),
             "stale": bool(draft.get("stale")),
             "baseline12": draft.get("baseline12") or "",
             "saved_at": float(draft.get("saved_at") or 0),
         }
 
     def save_draft(self, key: str) -> dict:
-        """把当前（含未保存编辑）的块列表写进草稿文件。"""
+        """把当前（含未保存编辑）的块列表写进草稿文件。
+
+        注意：内存里的 ``_drafts[key]["chunks"]`` 是**会话重放起点**（打开时从磁盘
+        草稿读入），保存后不能替换成「已应用全部 ops 的结果」，否则撤销时
+        （弹出最后一个 op 后）会从含该 op 结果的起点重放，导致块残留、后续
+        drop 找不到切片。这里只更新文件与元信息，重放起点保持不变。
+        """
         doc = self.doc_payload(key)
         entry = self.bridge_for(key).manifest.get(key)
         chunks_path = Path(entry.jsonl)
@@ -190,13 +197,14 @@ class Studio:
         path = drafts.save_draft(
             Path(self.cfg.data_root) / "draft", stem, baseline12, doc["chunks"]
         )
+        previous = self._drafts.get(key) or {}
         self._drafts[key] = {
             "stem": stem,
             "path": path,
             "baseline12": baseline12,
             "saved_at": path.stat().st_mtime,
             "stale": False,
-            "chunks": [dict(chunk) for chunk in doc["chunks"]],
+            "chunks": [dict(chunk) for chunk in (previous.get("chunks") or [])],
         }
         self._dirty.discard(key)
         return self.doc_payload(key)

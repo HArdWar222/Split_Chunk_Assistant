@@ -158,5 +158,44 @@ class ExportTest(DraftTestBase):
         self.assertNotIn("span", rows[0])
 
 
+class UndoAfterSaveTest(DraftTestBase):
+    """回归：保存草稿后撤销，不能从「已应用全部 ops」的草稿起点重放。"""
+
+    def test_undo_after_save_removes_added_chunk(self):
+        status, doc = self.post(
+            "/api/op",
+            {
+                "key": self.key,
+                "op": {
+                    "op": "add",
+                    "text": "补充的一条。",
+                    "chunk_kind": "paragraph",
+                    "after_id": "测试包法规-0002",
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(doc["chunks"]), 3)
+        self.assertEqual(self.post("/api/draft/save", {"key": self.key})[0], 200)
+        status, doc = self.post("/api/undo", {"key": self.key})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(doc["chunks"]), 2)
+        self.assertNotIn("补充的一条。", [chunk["chunk"] for chunk in doc["chunks"]])
+        self.assertEqual(self.post("/api/redo", {"key": self.key})[0], 200)
+        self.assertEqual(len(self.post("/api/undo", {"key": self.key})[1]["chunks"]), 2)
+
+    def test_undo_of_drop_after_save_restores_chunk(self):
+        status, _ = self.post(
+            "/api/op",
+            {"key": self.key, "op": {"op": "drop", "id": "测试包法规-0002"}},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(self.post("/api/draft/save", {"key": self.key})[0], 200)
+        status, doc = self.post("/api/undo", {"key": self.key})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(doc["chunks"]), 2)
+        self.assertEqual(doc["chunks"][1]["id"], "测试包法规-0002")
+
+
 if __name__ == "__main__":
     unittest.main()
