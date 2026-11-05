@@ -7,7 +7,9 @@
 ; Output: dist\SplitChunkAssistant-Setup.exe
 ;
 ; Notes:
-; - The program is installed under Program Files (admin required).
+; - Default is a per-user install (no admin): {autopf} resolves to
+;   %LOCALAPPDATA%\Programs\SplitChunkAssistant. Users may still choose an
+;   all-users install from the privileges dialog.
 ; - config.json and data\ are NOT bundled: on first run the app creates them next
 ;   to the exe, or falls back to %LOCALAPPDATA%\SplitChunkAssistant when the
 ;   install directory is not writable.
@@ -32,7 +34,8 @@ Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
 
 [Languages]

@@ -31,23 +31,52 @@ dist\
 
 参数：`-NoZip` 跳过 zip；`-SkipInstall` 不自动安装 PyInstaller。
 
+构建前会自动清掉 `vendor\splitchunk` 下的 `__pycache__`（冻结引擎运行时可能写入，不应被打进包里）。
+
 ## 3. 生成安装包（可选）
 
-1. 安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。
-2. 先用上面的命令打出 `dist\SplitChunkAssistant\`。
-3. 编译脚本：
+1. 安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。没有管理员权限时可以按用户安装：
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+# 下载 6.7.4 后静默按用户安装（无需管理员）
+.\innosetup-6.7.4.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER
+# 安装后 ISCC 位于：
+#   %LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe
+```
+
+2. 先用上面的命令打出 `dist\SplitChunkAssistant\`。
+3. 编译脚本（按用户安装的 Inno Setup 用 `%LOCALAPPDATA%` 路径）：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\installer.iss
+# 或全局安装时：& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
 ```
 
 产物：`dist\SplitChunkAssistant-Setup.exe`。
 
-安装行为：
+安装行为（默认**按用户安装**，不需要管理员）：
 
-- 安装到 `C:\Program Files\SplitChunkAssistant`（需要管理员）
-- 创建开始菜单/桌面快捷方式与卸载项
-- 数据**不打进**安装包；首次启动时创建
+- 安装到 `%LOCALAPPDATA%\Programs\SplitChunkAssistant`
+- 创建开始菜单快捷方式（可选桌面快捷方式）与卸载项
+- 数据**不打进**安装包；首次启动时创建在安装目录下（该目录可写）
+- 向导里仍可选择「为所有用户安装」，此时安装到 `C:\Program Files\SplitChunkAssistant`
+
+静默安装 / 卸载（便于脚本或冒烟）：
+
+```powershell
+# 安装
+.\dist\SplitChunkAssistant-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+# 卸载（保留 config.json 与 data\，属于用户数据）
+& "$env:LOCALAPPDATA\Programs\SplitChunkAssistant\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+安装后验证：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\SplitChunkAssistant\SplitChunkAssistant.exe" --port 8793 --no-open
+# 另开一个窗口
+Invoke-RestMethod http://127.0.0.1:8793/api/health
+```
 
 ## 4. 配置与数据放在哪
 
@@ -117,3 +146,10 @@ dist\
 5. 编辑一次 → 保存草稿 → 提交 → `data\backup\` 出现备份。
 6. 左栏「⬆ 添加文件」导入一个 md，确认自动切块。
 7. 关闭命令行窗口 → 服务停止；重新双击可再次使用。
+
+安装包额外验证（第 3 节的静默安装命令）：
+
+8. 静默安装后 `%LOCALAPPDATA%\Programs\SplitChunkAssistant\SplitChunkAssistant.exe` 存在，开始菜单有快捷方式。
+9. 运行已安装的 exe（`--port 8793 --no-open`）→ `/api/health` 返回 `ok`，`/api/config` 的 `engine.ok=true`、`engine.version` 正确、`data_root` 在安装目录下。
+10. 往已安装版本的 `data\source\` 丢一个 md → 自动切块成功。
+11. 静默卸载 → 程序文件、快捷方式、卸载项被删除；`config.json` 与 `data\` 保留（用户数据）。

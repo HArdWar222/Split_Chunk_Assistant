@@ -25,6 +25,11 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
+    # The frozen engine executes from vendor\splitchunk, so Python may write
+    # __pycache__ there. Strip bytecode before copying it into the bundle.
+    Get-ChildItem -Path (Join-Path $root "vendor\splitchunk") -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
     python -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
         if ($SkipInstall) { throw "PyInstaller is not installed; run: python -m pip install pyinstaller" }
