@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import threading
 import unittest
+from unittest import mock
 
 from chunk_studio import server as srv
 from chunk_studio.api import App
@@ -53,6 +54,24 @@ class ExistingInstanceTest(unittest.TestCase):
                 second.server_close()
         finally:
             httpd.server_close()
+
+
+class OpenBrowserTest(unittest.TestCase):
+    def test_prefers_startfile_on_windows(self):
+        with mock.patch.object(srv.os, "startfile", create=True) as startfile:
+            self.assertTrue(srv._open_browser("http://127.0.0.1:8790/"))
+        startfile.assert_called_once()
+
+    def test_falls_back_to_webbrowser(self):
+        with mock.patch.object(srv.os, "startfile", create=True, side_effect=OSError("boom")):
+            with mock.patch.object(srv.webbrowser, "open", return_value=True) as open_:
+                self.assertTrue(srv._open_browser("http://127.0.0.1:8790/"))
+        open_.assert_called_once()
+
+    def test_returns_false_when_all_fail(self):
+        with mock.patch.object(srv.os, "startfile", create=True, side_effect=OSError("boom")):
+            with mock.patch.object(srv.webbrowser, "open", side_effect=RuntimeError("nope")):
+                self.assertFalse(srv._open_browser("http://127.0.0.1:8790/"))
 
 
 if __name__ == "__main__":

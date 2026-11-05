@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import webbrowser
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from .api import App
 from .config import Config, ConfigError, DEFAULT_PORT
-from .paths import default_config_path, ensure_data_layout
+from .paths import default_config_path, ensure_data_layout, is_frozen
 from .studio import Studio
 from . import __phase__, __version__
 
@@ -94,15 +95,31 @@ def build_server(app: App, host: str = "127.0.0.1", port: int = DEFAULT_PORT) ->
     return _StudioHTTPServer((host, port), make_handler(app))
 
 
+def _open_browser(url: str) -> bool:
+    """同步打开默认浏览器，返回是否成功。
+
+    Windows 上用 ``os.startfile`` 最稳（冻结成 exe 后 ``webbrowser`` 偶尔找不到
+    浏览器）；其它平台退回 ``webbrowser.open``。
+    """
+    if os.name == "nt" and hasattr(os, "startfile"):
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606 - 本机文件/URL
+            return True
+        except OSError:
+            pass
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:  # noqa: BLE001 - 打不开浏览器不影响服务
+        return False
+
+
 def _open_browser_later(url: str, delay: float = 0.6) -> None:
     def run() -> None:
         import time
 
         time.sleep(delay)
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001 - 打不开浏览器不影响服务
-            pass
+        if not _open_browser(url):
+            print(f"浏览器没有自动打开，请手动访问：{url}", flush=True)
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -170,9 +187,12 @@ def main(argv: list[str] | None = None) -> int:
     if running:
         print(f"127.0.0.1:{port} 上已经有一个 SplitChunkAssistant 在运行：{running}", flush=True)
         print("  已直接为你打开浏览器；如需再开一个实例，请换端口，例如：", flush=True)
-        print(f"  python -m chunk_studio.server --port {port + 1}", flush=True)
-        if args.open_browser:
-            _open_browser_later(running, delay=0.2)
+        if is_frozen():
+            print(f'  SplitChunkAssistant.exe --port {port + 1}', flush=True)
+        else:
+            print(f"  python -m chunk_studio.server --port {port + 1}", flush=True)
+        if args.open_browser and not _open_browser(running):
+            print(f"  浏览器没有自动打开，请手动访问：{running}", flush=True)
         return 0
     try:
         httpd = build_server(app, "127.0.0.1", port)
