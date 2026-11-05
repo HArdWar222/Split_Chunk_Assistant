@@ -6,7 +6,10 @@ server.py 只负责把三元组写回 socket。
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import os
 import traceback
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -27,6 +30,11 @@ STATIC_TYPES = {
 }
 STATIC_ALLOWED = {"app.js", "style.css"}
 
+# 批量导入原文件：单文件 ≤16MB、整批 ≤64MB（server.MAX_BODY_BYTES 会按整批放大）。
+UPLOAD_MAX_FILE = 16 * 1024 * 1024
+UPLOAD_MAX_TOTAL = 64 * 1024 * 1024
+UPLOAD_EXTS = {".md", ".markdown", ".txt"}
+
 
 class ApiError(Exception):
     """带 HTTP 状态码的业务错误。"""
@@ -40,6 +48,24 @@ class ApiError(Exception):
 def _json(obj, status: int = 200) -> tuple[int, str, bytes]:
     body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
     return status, "application/json; charset=utf-8", body
+
+
+def _safe_upload_name(raw: object) -> str:
+    """校验上传文件名并统一成 ``<stem>.md``（拒绝路径穿越 / 控制字符 / 非法扩展名）。"""
+    name = str(raw or "").strip()
+    if not name:
+        raise ApiError(400, "文件名不能为空")
+    if "/" in name or "\\" in name or ".." in name or Path(name).name != name:
+        raise ApiError(400, f"文件名不合法：{raw}")
+    if any(ord(ch) < 32 for ch in name):
+        raise ApiError(400, f"文件名里含有控制字符：{raw}")
+    suffix = Path(name).suffix.lower()
+    if suffix not in UPLOAD_EXTS:
+        raise ApiError(400, f"只支持 .md / .markdown / .txt：{name}")
+    stem = Path(name).stem.strip()
+    if not stem or stem in {".", ".."}:
+        raise ApiError(400, f"文件名不合法：{raw}")
+    return stem + ".md"
 
 
 class App:
@@ -102,6 +128,74 @@ class App:
                     "error": None if ok else (payload.get("error") or "切块产物不可用"),
                 },
                 200 if ok else 503,
+            )
+
+        if method == "POST" and path == "/api/upload":
+            # 批量导入原文件到 data/source/（只接受 UTF-8 文本；同名不覆盖）
+            data = self._read_json(body)
+            items = data.get("files")
+            if not isinstance(items, list) or not items:
+                raise ApiError(400, "files 不能为空")
+            source_dir = Path(self.studio.cfg.data_root) / "source"
+            if not source_dir.is_dir():
+                raise ApiError(503, f"本地数据目录缺少 source/：{source_dir}")
+            created: list[str] = []
+            skipped: list[str] = []
+            errors: list[dict] = []
+            total = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    errors.append({"name": "", "error": "条目不是对象"})
+                    continue
+                raw_name = str(item.get("name") or "")
+                try:
+                    name = _safe_upload_name(raw_name)
+                except ApiError as exc:
+                    errors.append({"name": raw_name, "error": exc.message})
+                    continue
+                b64 = item.get("data_b64")
+                if not isinstance(b64, str) or not b64:
+                    errors.append({"name": raw_name, "error": "内容为空"})
+                    continue
+                try:
+                    raw = base64.b64decode(b64, validate=True)
+                except (binascii.Error, ValueError):
+                    errors.append({"name": raw_name, "error": "内容不是合法 base64"})
+                    continue
+                if len(raw) > UPLOAD_MAX_FILE:
+                    errors.append({"name": raw_name, "error": "单文件超过 16MB"})
+                    continue
+                total += len(raw)
+                if total > UPLOAD_MAX_TOTAL:
+                    errors.append({"name": raw_name, "error": "整批超过 64MB，已停止"})
+                    break
+                try:
+                    text = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    errors.append({"name": raw_name, "error": "不是 UTF-8 编码（请先转码）"})
+                    continue
+                if not text.strip():
+                    errors.append({"name": raw_name, "error": "内容为空"})
+                    continue
+                target = source_dir / name
+                if target.exists():
+                    skipped.append(name)
+                    continue
+                tmp = target.with_name(target.name + ".uploading")
+                tmp.write_text(text, encoding="utf-8", newline="")
+                os.replace(tmp, target)
+                created.append(name)
+            if created:
+                self.studio.reload()
+            return _json(
+                {
+                    "ok": True,
+                    "created": created,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "files": self.studio.files_payload() if created else None,
+                    "message": "已导入 {} 个文件".format(len(created)),
+                }
             )
 
         if method == "GET" and path == "/api/watch":

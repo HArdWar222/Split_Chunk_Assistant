@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.30-p3d">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.31-p3e">
 </head>
 <body>
   <header class="topbar">
@@ -34,10 +34,13 @@
   </header>
 
   <main class="layout">
-    <aside class="sidebar" aria-label="文件列表">
+    <aside class="sidebar" aria-label="文件列表" id="sidebar">
       <div class="search-row">
         <input id="search" type="search" placeholder="搜索法规名 / 分组…" autocomplete="off" aria-label="搜索法规">
+        <button id="btn-upload" class="btn btn-upload" type="button" title="批量导入原文件（.md / .markdown / .txt，写入 data/source）">⬆ 添加文件</button>
+        <input id="file-input" type="file" multiple accept=".md,.markdown,.txt" hidden>
       </div>
+      <div class="drop-hint" id="drop-hint" hidden>松开导入到 data/source</div>
       <div class="stats" id="stats"></div>
       <nav class="tree" id="tree" aria-label="文件列表"></nav>
     </aside>
@@ -224,6 +227,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.30-p3d" defer></script>
+  <script src="/static/app.js?v=0.3.31-p3e" defer></script>
 </body>
 </html>

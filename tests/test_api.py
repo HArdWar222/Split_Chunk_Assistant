@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 from pathlib import Path
@@ -425,6 +426,87 @@ class AppTest(unittest.TestCase):
     def test_favicon(self):
         status, _, raw = self.get("/favicon.ico")
         self.assertEqual(status, 204)
+
+
+class UploadTest(unittest.TestCase):
+    """POST /api/upload：批量导入原文件到 data/source。"""
+
+    def setUp(self):
+        self._tmp = temp_dir()
+        self.base = self._tmp
+        self.data_root = make_two_file_data_dir(self.base)
+        self.config_path = self.base / "config.json"
+        cfg = Config(data_root=str(self.data_root), port=8790)
+        self.studio = Studio(cfg=cfg, config_path=self.config_path)
+        self.app = App(self.studio)
+        self.source_dir = self.data_root / "source"
+
+    def tearDown(self):
+        remove(self._tmp)
+
+    def post(self, path: str, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return self.app.handle("POST", path, body)
+
+    def body(self, triple):
+        status, ctype, raw = triple
+        self.assertIn("json", ctype)
+        return status, json.loads(raw.decode("utf-8"))
+
+    def _files(self, *items):
+        return {
+            "files": [
+                {"name": name, "data_b64": base64.b64encode(content.encode("utf-8")).decode("ascii")}
+                for name, content in items
+            ]
+        }
+
+    def test_upload_creates_files_and_reloads(self):
+        status, data = self.body(self.post("/api/upload", self._files(("新导入法规.md", "# 新法规\n\n第一条 测试。"))))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["created"], ["新导入法规.md"])
+        self.assertEqual(data["skipped"], [])
+        self.assertEqual(data["errors"], [])
+        self.assertTrue((self.source_dir / "新导入法规.md").exists())
+        self.assertEqual(
+            (self.source_dir / "新导入法规.md").read_text(encoding="utf-8"),
+            "# 新法规\n\n第一条 测试。",
+        )
+        # 只有源文件还没有 chunks：它不会出现在文件清单里，等自动切块完成后才会出现
+        keys = {f["key"] for g in data["files"]["groups"] for f in g["files"]}
+        self.assertEqual(keys, {"data/测试法", "data/GB 0001-2020 测试标准"})
+
+    def test_upload_skips_existing_name(self):
+        (self.source_dir / "同名.md").write_text("# 已存在", encoding="utf-8")
+        status, data = self.body(self.post("/api/upload", self._files(("同名.md", "# 新内容"))))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], [])
+        self.assertEqual(data["skipped"], ["同名.md"])
+        # 同名不覆盖
+        self.assertEqual((self.source_dir / "同名.md").read_text(encoding="utf-8"), "# 已存在")
+
+    def test_upload_rejects_path_traversal(self):
+        status, data = self.body(self.post("/api/upload", self._files(("../evil.md", "x"))))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], [])
+        self.assertEqual(len(data["errors"]), 1)
+        self.assertIn("文件名不合法", data["errors"][0]["error"])
+        self.assertFalse((self.base / "evil.md").exists())
+
+    def test_upload_rejects_bad_extension(self):
+        status, data = self.body(self.post("/api/upload", self._files(("坏文件.exe", "x"))))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], [])
+        self.assertEqual(len(data["errors"]), 1)
+        self.assertIn("只支持", data["errors"][0]["error"])
+
+    def test_upload_rejects_bad_utf8(self):
+        payload = {"files": [{"name": "乱码.md", "data_b64": base64.b64encode(b"\xff\xfe\x00").decode("ascii")}]}
+        status, data = self.body(self.post("/api/upload", payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], [])
+        self.assertIn("UTF-8", data["errors"][0]["error"])
 
 
 if __name__ == "__main__":

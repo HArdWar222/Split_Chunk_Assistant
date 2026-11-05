@@ -22,7 +22,7 @@ from .config import Config, ConfigError, DEFAULT_PORT
 from .studio import Studio
 from . import __phase__, __version__
 
-MAX_BODY_BYTES = 1024 * 1024
+MAX_BODY_BYTES = 64 * 1024 * 1024  # 批量导入原文件（/api/upload）需要比普通 JSON 大得多
 
 
 class Handler(BaseHTTPRequestHandler):

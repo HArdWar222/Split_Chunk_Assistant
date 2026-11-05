@@ -931,3 +931,17 @@ body.row-picking { user-select: none; }
 
 /* Ctrl/⌘ 多选卡片 */
 .chunk-card.multi-sel { outline: 2px solid #a855f7; outline-offset: -2px; background: #faf5ff; }
+
+/* 左栏批量导入原文件 */
+.btn-upload { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+.drop-hint {
+  margin: 6px 10px 0;
+  padding: 8px 10px;
+  border: 1px dashed #60a5fa;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  text-align: center;
+}
+.sidebar.dragging { outline: 3px dashed #2563eb; outline-offset: -3px; background: #f8fbff; }

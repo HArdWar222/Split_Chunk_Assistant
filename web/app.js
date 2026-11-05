@@ -44,6 +44,10 @@
     stats: document.getElementById("stats"),
     tree: document.getElementById("tree"),
     search: document.getElementById("search"),
+    sidebar: document.getElementById("sidebar"),
+    btnUpload: document.getElementById("btn-upload"),
+    fileInput: document.getElementById("file-input"),
+    dropHint: document.getElementById("drop-hint"),
     phase: document.getElementById("phase"),
     sourceTitle: document.getElementById("source-title"),
     sourceMeta: document.getElementById("source-meta"),
@@ -629,7 +633,133 @@
     });
   }
 
-  // ---------- 文件清单 ----------
+  // ---------- 批量导入原文件（写入 data/source） ----------
+  var UPLOAD_EXTS = [".md", ".markdown", ".txt"];
+  var UPLOAD_MAX_FILE = 16 * 1024 * 1024;
+  var UPLOAD_MAX_TOTAL = 64 * 1024 * 1024;
+
+  function fileToBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var bytes = new Uint8Array(reader.result);
+        var step = 0x8000;
+        var out = "";
+        for (var i = 0; i < bytes.length; i += step) {
+          out += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+        }
+        resolve(btoa(out));
+      };
+      reader.onerror = function () {
+        reject(reader.error || new Error("读取文件失败"));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function uploadFiles(fileList) {
+    var files = [];
+    [].forEach.call(fileList || [], function (f) { files.push(f); });
+    if (!files.length) return;
+    var rejected = [];
+    var keep = [];
+    var total = 0;
+    files.forEach(function (f) {
+      var lower = String(f.name || "").toLowerCase();
+      var okExt = UPLOAD_EXTS.some(function (ext) { return lower.slice(-ext.length) === ext; });
+      if (!okExt) { rejected.push(f.name + "（扩展名不支持）"); return; }
+      if (f.size > UPLOAD_MAX_FILE) { rejected.push(f.name + "（超过 16MB）"); return; }
+      total += f.size;
+      if (total > UPLOAD_MAX_TOTAL) { rejected.push(f.name + "（整批超过 64MB）"); return; }
+      keep.push(f);
+    });
+    if (!keep.length) {
+      showToast("没有可导入的文件" + (rejected.length ? "：" + rejected.join("；") : ""), "err");
+      return;
+    }
+    el.btnUpload.disabled = true;
+    el.btnUpload.textContent = "导入中…";
+    Promise.all(keep.map(function (f) {
+      return fileToBase64(f).then(function (b64) { return { name: f.name, data_b64: b64 }; });
+    })).then(function (payload) {
+      return postJSON("/api/upload", { files: payload });
+    }).then(function (res) {
+      var parts = [];
+      if (res.created && res.created.length) parts.push("已导入 " + res.created.length + " 个");
+      if (res.skipped && res.skipped.length) parts.push("同名跳过 " + res.skipped.length + " 个");
+      if (res.errors && res.errors.length) parts.push("失败 " + res.errors.length + " 个");
+      if (rejected.length) parts.push("本地拒收 " + rejected.length + " 个");
+      var kind = (res.errors && res.errors.length) || rejected.length ? "warn" : "ok";
+      showToast(parts.join("，") || "已导入", kind);
+      if (res.errors && res.errors.length) {
+        console.warn("上传失败明细", res.errors.concat(rejected.map(function (r) { return { name: r, error: r }; })));
+      }
+      if (res.files) {
+        state.data = res.files;
+        state.config = res.files.config || state.config;
+        renderStats(state.data);
+        renderTree();
+      }
+      pollWatch();
+    }).catch(function (err) {
+      showToast("导入失败：" + (err && err.message ? err.message : String(err)), "err");
+    }).then(function () {
+      el.btnUpload.disabled = false;
+      el.btnUpload.textContent = "⬆ 添加文件";
+    });
+  }
+
+  function bindUploadEvents() {
+    if (el.btnUpload && el.fileInput) {
+      el.btnUpload.addEventListener("click", function () { el.fileInput.click(); });
+      el.fileInput.addEventListener("change", function () {
+        uploadFiles(el.fileInput.files);
+        el.fileInput.value = "";
+      });
+    }
+    if (!el.sidebar) return;
+    var dragDepth = 0;
+    function hasFiles(ev) {
+      var dt = ev.dataTransfer;
+      if (!dt) return false;
+      if (dt.types) {
+        for (var i = 0; i < dt.types.length; i++) {
+          if (dt.types[i] === "Files") return true;
+        }
+        return false;
+      }
+      return true;
+    }
+    function showDrop(show) {
+      el.sidebar.classList.toggle("dragging", !!show);
+      if (el.dropHint) el.dropHint.hidden = !show;
+    }
+    el.sidebar.addEventListener("dragenter", function (ev) {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      dragDepth += 1;
+      showDrop(true);
+    });
+    el.sidebar.addEventListener("dragover", function (ev) {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "copy";
+    });
+    el.sidebar.addEventListener("dragleave", function (ev) {
+      if (!hasFiles(ev)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) showDrop(false);
+    });
+    el.sidebar.addEventListener("drop", function (ev) {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      dragDepth = 0;
+      showDrop(false);
+      uploadFiles(ev.dataTransfer.files);
+    });
+  }
+
+
   function loadFiles() {
     setStatus("加载文件清单…");
     el.tree.innerHTML = "";
@@ -3799,6 +3929,7 @@
       var key = keyFromHash();
       if (key && key !== state.docKey) selectByKey(key);
     });
+    bindUploadEvents();
   }
 
   bindEvents();
