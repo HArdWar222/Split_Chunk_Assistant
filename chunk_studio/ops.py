@@ -28,11 +28,14 @@ import copy
 import hashlib
 import re
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Callable
 
 from .align import locate_text_span, norm_line
 
 RE_ID = re.compile(r"^.+-(\d{4,})(?:-p(\d+))?$")
+
+#: part 块 id 的 ``-pN`` 后缀（删除单个 part 后要重排编号）。
+RE_PART_SUFFIX = re.compile(r"-p\d+$")
 
 #: 条号识别：行首（允许列表符 / 加粗 / 标题记号 / 全角空格）的「第X条」
 RE_LAW_NUM = re.compile(r"^\s*(?:[#>*\-+]\s*)*第\s*[〇零一二三四五六七八九十百千两0-9]{1,8}\s*条")
@@ -453,9 +456,41 @@ def _extend(chunks: list[dict], op: dict, law_name: str, reserved=None, source_l
     return _renumber(out, law_name)
 
 
+def _reindex_parts(chunks: list[dict]) -> list[dict]:
+    """删除单个 part 后重排同组剩余 part：编号连续、只剩一个时变回普通块。"""
+    out = list(chunks)
+    i = 0
+    while i < len(out):
+        if int(out[i].get("part_total") or 1) <= 1:
+            i += 1
+            continue
+        base = RE_PART_SUFFIX.sub("", str(out[i].get("id") or ""))
+        group: list[int] = []
+        j = i
+        while j < len(out) and RE_PART_SUFFIX.sub("", str(out[j].get("id") or "")) == base:
+            group.append(j)
+            j += 1
+        total = len(group)
+        for number, idx in enumerate(group, start=1):
+            chunk = out[idx]
+            if total == 1:
+                chunk["id"] = base
+                chunk["part_index"] = 1
+                chunk["part_total"] = 1
+            else:
+                chunk["id"] = f"{base}-p{number}"
+                chunk["part_index"] = number
+                chunk["part_total"] = total
+        i = j
+    return out
+
+
 def _drop(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
-    return chunks[:index] + chunks[index + 1 :]
+    out = chunks[:index] + chunks[index + 1 :]
+    if int(chunks[index].get("part_total") or 1) > 1:
+        out = _reindex_parts(out)
+    return out
 
 
 def _clause_anchor(chunk: dict) -> str:
@@ -598,14 +633,20 @@ def apply_ops(
     *,
     law_name: str,
     source_lines: list[str] | None = None,
+    materialize: Callable[[list[dict]], list[dict]] | None = None,
 ) -> list[dict]:
     """按顺序应用一串编辑命令，返回新块列表（输入不变）。
 
     ``reserved`` 记录基线里出现过的全部 id（每步再并入当前结果），
     保证会话内新 id 永不复用已删块编号。
     ``source_lines`` 为源文件行（只读）；传了就为拆分块补行区间，不传则保持旧行为。
+    ``materialize`` 是「自动分 part」的物化钩子（由 Studio 传入，避免本模块
+    import autopart 造成循环）：每条命令执行后调用一次，把超长块落成真实 part，
+    这样后续命令可以直接按 part id 操作、撤销重放也一致。
     """
     result = [_copy(chunk) for chunk in chunks]
+    if materialize is not None:
+        result = materialize(result)
     reserved = {str(chunk.get("id")) for chunk in (chunks or [])}
     for position, op in enumerate(ops or []):
         if not isinstance(op, dict):
@@ -620,6 +661,8 @@ def apply_ops(
             raise OpNotFound(f"第 {position + 1} 条命令（{kind}）失败：{exc}") from None
         except OpError as exc:
             raise OpError(f"第 {position + 1} 条命令（{kind}）失败：{exc}") from None
+        if materialize is not None:
+            result = materialize(result)
         reserved |= {str(chunk.get("id")) for chunk in result}
     return result
 

@@ -11,12 +11,11 @@
 
 from __future__ import annotations
 
-import re
 from collections import OrderedDict
 from pathlib import Path
 
 from .align import align_chunks, summarize_align
-from .autopart import auto_part_chunks
+from .autopart import materialize_chunks
 from .chunker import WatchService, engine_info
 from .config import Config, ConfigError
 from . import drafts
@@ -49,43 +48,6 @@ DOC_CACHE_SIZE = 8
 
 #: 表格视图缓存条数（table_grid 体积大，按文件懒加载）。
 TABLES_CACHE_SIZE = 8
-
-
-#: 自动分 part 的 id 后缀（``<块 id>-p2``）。
-_PART_SUFFIX_RE = re.compile(r"^(.*)-p\d+$")
-
-
-def _underlying_ids(chunks: list[dict], op: dict) -> dict:
-    """把「自动分 part」展示层里的 ``-pN`` 块 id 翻译回真实块 id。
-
-    分 part 只是 doc 载荷的展示结果；删除 / 合并等命令必须落在真实块上，
-    否则校验重放（不含自动分 part）会报「第 N 条命令（drop）失败：找不到切片」。
-    """
-    known = {str(chunk.get("id")) for chunk in chunks}
-
-    def fix(chunk_id):
-        cid = str(chunk_id)
-        if cid in known:
-            return chunk_id
-        match = _PART_SUFFIX_RE.match(cid)
-        if match and match.group(1) in known:
-            return match.group(1)
-        return chunk_id
-
-    fixed = dict(op)
-    for field in ("id", "before_id", "after_id"):
-        value = fixed.get(field)
-        if isinstance(value, str):
-            fixed[field] = fix(value)
-    ids = fixed.get("ids")
-    if isinstance(ids, (list, tuple)):
-        mapped: list = []
-        for chunk_id in ids:
-            target = fix(chunk_id)
-            if target not in mapped:
-                mapped.append(target)
-        fixed["ids"] = mapped
-    return fixed
 
 
 def _public_extras(extras: dict) -> dict:
@@ -484,38 +446,66 @@ class Studio:
         )
         return stats
 
+    def _materializer(self, base: dict):
+        """返回「自动分 part 物化」钩子（未开启 auto_part 时为 None）。
+
+        物化发生在命令重放过程中：任何命令产生超长块后立刻拆成真实 ``-pN``
+        块并算好 ``part_span``，后续命令就能按 part 操作，撤销重放也一致。
+        基线物化结果按 (max_chars, min_part_chars) 缓存在 ``base["_materials"]``。
+        """
+        if not self.cfg.auto_part:
+            return None
+        max_chars = self.cfg.max_chars
+        min_chars = self.cfg.min_part_chars
+        raw_lines = base.get("_raw_lines") or []
+
+        def run(chunks: list[dict]) -> list[dict]:
+            return materialize_chunks(chunks, max_chars, min_chars, raw_lines)
+
+        return run
+
+    def _materialized_base(self, base: dict, materializer) -> list[dict]:
+        """把基线块物化一次并缓存（diff 的基准要与页面看到的一致）。"""
+        if materializer is None:
+            return base["chunks"]
+        cache = base.setdefault("_materials", {})
+        token = (self.cfg.max_chars, self.cfg.min_part_chars)
+        cached = cache.get(token)
+        if cached is None:
+            cached = materializer(base["chunks"])
+            cache[token] = cached
+        return cached
+
     def doc_payload(self, key: str) -> dict:
         """基线 / 草稿 + 会话内编辑命令重放后的三栏载荷。"""
         base = self._base_doc(key)
         ops = list(self._ops.get(key) or [])
         raw_lines = base.get("_raw_lines") or []
+        materializer = self._materializer(base)
         draft = self._active_draft(key)
         if draft and draft.get("chunks"):
             chunks = [dict(chunk) for chunk in draft["chunks"]]
         else:
             chunks = base["chunks"]
+        if materializer is not None:
+            chunks = materializer(chunks)
         if ops:
             chunks = apply_ops(
                 chunks,
                 ops,
                 law_name=base["law_name"],
                 source_lines=raw_lines,
-            )
-        if self.cfg.auto_part:
-            chunks = auto_part_chunks(
-                chunks,
-                base["law_name"],
-                self.cfg.max_chars,
-                self.cfg.min_part_chars,
+                materialize=materializer,
             )
         payload = dict(base)
         payload.pop("_raw_lines", None)
+        payload.pop("_materials", None)
         payload["chunks"] = chunks
         payload["stats"] = self._restat(chunks, base["stats"])
         payload["edited"] = False  # P3 覆盖层
         payload["dirty"] = key in self._dirty
         payload["draft"] = self.draft_payload(key)
-        payload["diff"] = chunk_diff(base["chunks"], chunks)
+        payload["diff"] = chunk_diff(self._materialized_base(base, materializer), chunks)
         payload["edits"] = {
             "n_ops": len(ops),
             "undo": len(ops),
@@ -579,17 +569,23 @@ class Studio:
         if not isinstance(op, dict):
             raise OpError("op 必须是 JSON 对象")
         base = self._base_doc(key)
+        raw_lines = base.get("_raw_lines") or []
+        materializer = self._materializer(base)
         draft = self._active_draft(key)
         if draft and draft.get("chunks"):
             start = [dict(chunk) for chunk in draft["chunks"]]
         else:
             start = base["chunks"]
-        if self.cfg.auto_part:
-            # 自动分 part 是展示层结果：命令里的 -pN 先翻译回真实块 id，
-            # 否则校验重放（不含自动分 part）会找不到切片。
-            op = _underlying_ids(start, op)
+        if materializer is not None:
+            start = materializer(start)
         candidate = list(self._ops.get(key) or []) + [op]
-        apply_ops(start, candidate, law_name=base["law_name"])  # 只做校验
+        apply_ops(
+            start,
+            candidate,
+            law_name=base["law_name"],
+            source_lines=raw_lines,
+            materialize=materializer,
+        )  # 只做校验
         self._ops[key] = candidate
         self._redo[key] = []
         self._dirty.add(key)

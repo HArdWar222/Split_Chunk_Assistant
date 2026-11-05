@@ -8,7 +8,8 @@
 - **表格块（只做第一类）**：多行表格块总量超限时按行区间拆成多个独立表格块
   （``表X 第a-b行``）；单行超长的大表格保持原样不拆。
 
-这里是纯函数，不做 IO；由 Studio 在重放编辑命令之后调用。
+这里是纯函数，不做 IO；由 Studio 在重放编辑命令时调用（``materialize_chunks``
+把超长块落成真实块，其它命令可继续按 part 操作）。
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .align import norm_line as _norm_line
 from .ops import (
     CHUNK_KINDS,
     DEFAULT_LAW_INVALID,
@@ -251,6 +253,91 @@ def split_table_chunk(chunks: list[dict], index: int, max_chars: int) -> list[di
         offset += len(group)
         out.append(item)
     return out
+
+
+def _annotate_part_spans(
+    parts: list[dict],
+    parent: dict,
+    source_lines: list[str] | None,
+) -> None:
+    """给拆出来的 part 标出「真实覆盖的源行区间」（``part_span``，视图字段）。
+
+    part 正文里除面包屑首行外的每一行，在父块 span 范围内按 ``norm_line``
+    顺序匹配，得到首/末行；匹配不到就回退父块 span（左侧泳道仍能画外层条）。
+    """
+    span = list(parent["span"]) if parent.get("span") else None
+    if not source_lines or not span:
+        for item in parts:
+            item["part_span"] = list(span) if span else None
+        return
+
+    lo = max(0, int(span[0]) - 1)
+    hi = min(len(source_lines), int(span[1]))
+    window = [_norm_line(line) for line in source_lines[lo:hi]]
+    cursor = 0
+    for item in parts:
+        lines = str(item.get("chunk") or "").split("\n")
+        if lines and _is_breadcrumb(lines[0]):
+            lines = lines[1:]
+        wanted = [_norm_line(line) for line in lines if _norm_line(line)]
+        start = end = -1
+        k = cursor
+        ok = True
+        for want in wanted:
+            hit = -1
+            for j in range(k, len(window)):
+                if window[j] and (window[j] == want or want in window[j]):
+                    hit = j
+                    break
+            if hit < 0:
+                ok = False
+                break
+            if start < 0:
+                start = hit
+            end = hit
+            k = hit + 1
+        if not ok or start < 0:
+            item["part_span"] = list(span)
+            continue
+        item["part_span"] = [lo + start + 1, lo + end + 1]
+        cursor = end + 1
+
+
+def materialize_chunks(
+    chunks: list[dict],
+    max_chars: int = DEFAULT_MAX_CHARS,
+    min_chars: int = DEFAULT_MIN_PART_CHARS,
+    source_lines: list[str] | None = None,
+) -> list[dict]:
+    """把超长块**真正拆开**（文本 → ``-pN`` 块；多行表格 → 行区间块）。
+
+    与 ``auto_part_chunks`` 的区别：这里产出的是真实块（id / part 字段 /
+    span / part_span 都写进块里），后续命令可以直接按 part 操作、撤销重放
+    也能复现同一个结果；``auto_part_chunks`` 只用于「不编辑时的展示」的旧路径。
+    """
+    max_chars = max(int(max_chars or DEFAULT_MAX_CHARS), 50)
+    min_chars = max(int(min_chars or DEFAULT_MIN_PART_CHARS), 20)
+    out: list[dict] = []
+    changed = False
+    for index, chunk in enumerate(chunks):
+        text = str(chunk.get("chunk") or "")
+        already = int(chunk.get("part_total") or 1) > 1
+        if len(text) <= max_chars or already:
+            out.append(chunk)
+            continue
+        kind = str(chunk.get("chunk_kind") or "")
+        if kind == "table":
+            replaced = split_table_chunk(chunks, index, max_chars)
+        else:
+            replaced = split_text_chunk(chunks, index, max_chars, min_chars)
+        if not replaced:
+            out.append(chunk)
+            continue
+        if kind != "table":
+            _annotate_part_spans(replaced, chunk, source_lines)
+        out.extend(replaced)
+        changed = True
+    return out if changed else chunks
 
 
 def auto_part_chunks(

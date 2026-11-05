@@ -6,11 +6,12 @@ import unittest
 
 from chunk_studio.autopart import (
     auto_part_chunks,
+    materialize_chunks,
     split_table_chunk,
     split_text_chunk,
     split_text_parts,
 )
-from chunk_studio.ops import chunk_hash
+from chunk_studio.ops import apply_ops, chunk_hash
 
 LAW = "测试法"
 
@@ -175,6 +176,55 @@ class AutoPartChunksTest(unittest.TestCase):
     def test_no_change_returns_same_object(self):
         chunks = [make_chunk("测试法-0001", "短正文", span=[1, 1])]
         self.assertIs(auto_part_chunks(chunks, LAW, 800, 200), chunks)
+
+
+class MaterializeTest(unittest.TestCase):
+    """``materialize_chunks``：超长块真正拆开（part_span / 表格行拆 / 幂等）。"""
+
+    def test_text_parts_get_part_span(self):
+        lines = [
+            "第一条 " + "安全生产责任制度应当落实到每一个岗位。" * 2,
+            "第二条 " + "生产经营单位应当建立安全生产责任制。" * 2,
+            "第三条 " + "从业人员应当接受安全生产教育和培训。" * 2,
+        ]
+        chunk = make_chunk("测试法-0001", "\n".join(lines), law_num="第一条", span=[1, 3])
+        out = materialize_chunks([chunk], max_chars=80, min_chars=30, source_lines=lines)
+        self.assertGreaterEqual(len(out), 2)
+        self.assertTrue(all(item["id"].startswith("测试法-0001-p") for item in out))
+        for item in out:
+            self.assertEqual(item["part_total"], len(out))
+            self.assertEqual(item["manual"], True)
+            self.assertEqual(item["span"], [1, 3])
+            self.assertIsNotNone(item["part_span"])
+            start, end = item["part_span"]
+            self.assertGreaterEqual(start, 1)
+            self.assertLessEqual(end, 3)
+            self.assertLessEqual(start, end)
+        # part_span 依次递进，不重叠
+        spans = [item["part_span"] for item in out]
+        for left, right in zip(spans, spans[1:]):
+            self.assertLessEqual(left[1], right[1])
+
+    def test_short_chunk_and_existing_part_untouched(self):
+        chunks = [
+            make_chunk("测试法-0001", "短正文", span=[1, 1]),
+            make_chunk("测试法-0002-p1", "已经是 part 的正文" * 100, span=[2, 2]),
+        ]
+        chunks[1]["part_index"] = 1
+        chunks[1]["part_total"] = 2
+        self.assertIs(materialize_chunks(chunks, 100, 30, []), chunks)
+
+    def test_drop_single_part_reindexes_group(self):
+        text = "\n".join("第%d条 " % i + "内容" * 80 for i in range(1, 4))
+        chunk = make_chunk("测试法-0001", text, span=[1, 3])
+        parts = materialize_chunks([chunk], max_chars=120, min_chars=40, source_lines=[])
+        self.assertGreaterEqual(len(parts), 3)
+        first = parts[0]["id"]
+        out = apply_ops(parts, [{"op": "drop", "id": first}], law_name=LAW)
+        self.assertEqual(len(out), len(parts) - 1)
+        self.assertEqual(out[0]["id"], "测试法-0001-p1")
+        self.assertEqual(out[0]["part_index"], 1)
+        self.assertEqual(out[0]["part_total"], len(parts) - 1)
 
 
 if __name__ == "__main__":

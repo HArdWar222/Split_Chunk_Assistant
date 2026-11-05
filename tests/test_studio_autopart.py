@@ -1,4 +1,4 @@
-"""自动分 part 开关下的编辑命令：``-pN`` 展示 id 必须映射回真实块 id。"""
+"""自动分 part 开关下的编辑命令：物化后的 part 是真实块，命令直接落在 part 上。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 import unittest
 
 from chunk_studio.config import Config
-from chunk_studio.ops import OpError
 from chunk_studio.studio import Studio
 
 from tests.fixtures import remove, temp_dir
@@ -59,33 +58,34 @@ class AutoPartCommandTest(unittest.TestCase):
     def _part_ids(self, doc: dict) -> list[str]:
         return [chunk["id"] for chunk in doc["chunks"] if chunk["id"].endswith(tuple(f"-p{i}" for i in range(1, 10)))]
 
-    def test_drop_part_id_removes_whole_logical_chunk(self):
+    def test_drop_part_id_removes_single_part(self):
+        """物化之后 part 是真实块：删分块卡只删这一块，同组其余 part 重排编号。"""
         doc = self.studio.doc_payload(self.key)
         parts = self._part_ids(doc)
-        self.assertGreater(len(parts), 1, "开启 auto_part 后应看到多个 part")
+        self.assertGreater(len(parts), 2, "开启 auto_part 后应看到多个 part")
 
         after = self.studio.apply_op(self.key, {"op": "drop", "id": parts[1]})
-        self.assertEqual(after["chunks"], [])
+        remaining = self._part_ids(after)
+        self.assertEqual(len(remaining), len(parts) - 1)
+        self.assertEqual(
+            [chunk["part_index"] for chunk in after["chunks"]],
+            list(range(1, len(parts))),
+        )
+        self.assertEqual(after["chunks"][0]["part_total"], len(parts) - 1)
 
         restored = self.studio.undo_op(self.key)
-        self.assertGreater(len(self._part_ids(restored)), 1)
+        self.assertEqual(len(self._part_ids(restored)), len(parts))
 
-    def test_merge_parts_of_same_chunk_is_rejected(self):
-        parts = self._part_ids(self.studio.doc_payload(self.key))
-        with self.assertRaises(OpError) as ctx:
-            self.studio.apply_op(
-                self.key, {"op": "merge_many", "ids": [parts[0], parts[1]]}
-            )
-        self.assertIn("集体合并至少需要 2 个切片 id", str(ctx.exception))
-
-    def test_patch_part_id_edits_whole_logical_chunk(self):
+    def test_patch_part_id_edits_only_that_part(self):
         parts = self._part_ids(self.studio.doc_payload(self.key))
         after = self.studio.apply_op(
             self.key,
             {"op": "patch", "id": parts[-1], "chunk": "第一条 替换后的正文。"},
         )
         texts = [chunk["chunk"] for chunk in after["chunks"]]
-        self.assertEqual(texts, ["第一条 替换后的正文。"])
+        self.assertEqual(texts[-1], "第一条 替换后的正文。")
+        self.assertEqual(len(texts), len(parts))
+        self.assertNotIn(LONG_TEXT, texts)
 
 
 if __name__ == "__main__":
