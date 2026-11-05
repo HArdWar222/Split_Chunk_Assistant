@@ -348,7 +348,9 @@ def _merge(chunks: list[dict], op: dict, law_name: str, reserved=None, source_li
 
     span_a, span_b = first.get("span"), second.get("span")
     merged["manual"] = bool(first.get("manual") or second.get("manual"))
-    if span_a and span_b and not merged["manual"]:
+    if span_a and span_b:
+        # 即便某块是手工改过的（manual），只要两边都有行区间，合并后仍能推出覆盖区间，
+        # 这样「段落 + 邻近表格」合并后不会退化成「未对齐」。
         merged["span"] = [min(int(span_a[0]), int(span_b[0])), max(int(span_a[1]), int(span_b[1]))]
         merged["align"] = "approx"
     else:
@@ -389,7 +391,7 @@ def _merge_many(chunks: list[dict], op: dict, law_name: str, reserved=None, sour
 
     spans = [chunk.get("span") for chunk in group]
     merged["manual"] = any(bool(chunk.get("manual")) for chunk in group)
-    if all(span for span in spans) and not merged["manual"]:
+    if all(span for span in spans):
         merged["span"] = [min(int(span[0]) for span in spans), max(int(span[1]) for span in spans)]
         merged["align"] = "approx"
     else:

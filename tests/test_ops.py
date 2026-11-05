@@ -209,6 +209,15 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(out[0]["chunk"], "第一条 为了测试。\n这是第二行。\n第二条 测试结束。")
         self.assertEqual(out[0]["span"], [3, 6])
 
+    def test_merge_with_manual_chunk_keeps_span(self):
+        # 手工改过的块与邻近块合并：两边都有行区间时仍应保留覆盖区间（不再变成「未对齐」）
+        chunks = base_chunks()
+        chunks[0]["manual"] = True
+        out = apply_ops(chunks, [{"op": "merge", "id": "测试法-0001", "with": "测试法-0002"}], law_name=LAW)
+        self.assertEqual(out[0]["span"], [3, 6])
+        self.assertEqual(out[0]["align"], "approx")
+        self.assertTrue(out[0]["manual"])
+
 
 class MergeManyTest(unittest.TestCase):
     def test_merge_three_adjacent(self):
@@ -240,7 +249,8 @@ class MergeManyTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["id"], "测试法-0001")
 
-    def test_merge_many_with_manual_chunk_loses_span(self):
+    def test_merge_many_with_manual_chunk_keeps_span(self):
+        # 手工改过的块只要两边都有行区间，合并后仍应给出覆盖区间（不再退化成「未对齐」）
         chunks = base_chunks()
         chunks[1]["manual"] = True
         out = apply_ops(
@@ -248,9 +258,20 @@ class MergeManyTest(unittest.TestCase):
             [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0003"]}],
             law_name=LAW,
         )
+        self.assertEqual(out[0]["span"], [3, 10])
+        self.assertEqual(out[0]["align"], "approx")
+        self.assertTrue(out[0]["manual"])
+
+    def test_merge_many_with_missing_span_stays_manual(self):
+        chunks = base_chunks()
+        chunks[1]["span"] = None
+        out = apply_ops(
+            chunks,
+            [{"op": "merge_many", "ids": ["测试法-0001", "测试法-0002", "测试法-0003"]}],
+            law_name=LAW,
+        )
         self.assertIsNone(out[0]["span"])
         self.assertEqual(out[0]["align"], "manual")
-        self.assertTrue(out[0]["manual"])
 
     def test_merge_many_errors(self):
         chunks = base_chunks()
