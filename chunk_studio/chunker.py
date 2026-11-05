@@ -164,6 +164,37 @@ def scan_pending(cfg: Config, now: float | None = None) -> list[PendingFile]:
 
 
 # -- 单文件切块 -------------------------------------------------------------
+def engine_command(
+    source: Path,
+    out_dir: Path,
+    source_root: Path,
+    strategy: str,
+    *,
+    frozen: bool | None = None,
+) -> list[str]:
+    """拼引擎子进程命令。
+
+    开发态用 ``python -m chunking_v2.cli``；PyInstaller 冻结态解释器就是本程序，
+    必须走隐藏入口 ``--run-chunk-cli``（由 chunk_studio.launcher 转发），否则会
+    递归启动自己。
+    """
+    args = [
+        str(source),
+        "--out-dir",
+        str(out_dir),
+        "--source-root",
+        str(source_root),
+        "--strategy",
+        strategy or "auto",
+        "--json",
+    ]
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if frozen:
+        return [sys.executable, "--run-chunk-cli", *args]
+    return [sys.executable, "-m", CLI_MODULE, *args]
+
+
 def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
     """起子进程切一个文件，返回结果字典（不抛异常，失败也返回）。
 
@@ -196,25 +227,17 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
             "message": f"无法创建临时切块目录：{exc}",
             "seconds": 0.0,
         }
-    cmd = [
-        sys.executable,
-        "-m",
-        CLI_MODULE,
-        str(item.source),
-        "--out-dir",
-        str(tmp_dir),
-        "--source-root",
-        str(source_dir),
-        "--strategy",
-        cfg.chunker_strategy or "auto",
-        "--json",
-    ]
+    tmp_dir_str = str(tmp_dir)
+    cmd = engine_command(item.source, Path(tmp_dir_str), source_dir, cfg.chunker_strategy)
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(engine_root) + (
-        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
-    )
+    if not getattr(sys, "frozen", False):
+        # 冻结态引擎已打进 exe，PYTHONPATH 指向 vendor 反而可能干扰导入。
+        env["PYTHONPATH"] = str(engine_root) + (
+            os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+        )
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     started = time.time()
     result: dict = {
         "subject": item.subject,
@@ -236,6 +259,7 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
             encoding="utf-8",
             errors="replace",
             timeout=DEFAULT_TIMEOUT,
+            creationflags=creationflags,
         )
     except subprocess.TimeoutExpired:
         result["message"] = f"切块超时（>{DEFAULT_TIMEOUT}s）"
