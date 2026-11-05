@@ -4,11 +4,12 @@
 ----
 - 引擎以 vendored 副本形式放在 ``vendor/splitchunk``（见 ``UPSTREAM.md``），
   工作台本身仍保持纯标准库：每次切块起一个 ``python -m chunking_v2.cli`` 子进程。
-- 引擎产物与工作台「两目录」约定一致：``<stem>.chunks.jsonl`` /
-  ``<stem>.extras.jsonl`` / ``<stem>.report.json``，写进 ``data/chunks/<子目录>/``。
+- 引擎产物落进「每个文档一个文件夹」的产物目录：``data/chunks/<子目录>/<名>/``
+  下的 ``chunks.jsonl`` / ``extras.jsonl`` / ``report.json``；CLI 先写临时目录，
+  成功后把三件套原子搬进文档目录。
 - watch 线程按 ``chunker_poll`` 秒轮询：``data/source`` 下有 md 而
-  ``data/chunks`` 下没有同名切块（或 report 里的 source_sha256 与原件不一致）时，
-  视为待切；``auto_chunk`` 打开就自动切，关闭时只提示、等手动按钮。
+  ``data/chunks/<名>/chunks.jsonl`` 不存在（或 report 里的 source_sha256 与原件
+  不一致）时，视为待切；``auto_chunk`` 打开就自动切，关闭时只提示、等手动按钮。
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -25,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import REPO_ROOT, Config
+from .manifest import CHUNKS_NAME, EXTRAS_NAME_LOCAL, REPORT_NAME
 
 ENGINE_PACKAGE = "chunking_v2"
 CLI_MODULE = "chunking_v2.cli"
@@ -144,12 +147,13 @@ def scan_pending(cfg: Config, now: float | None = None) -> list[PendingFile]:
         rel = source.parent.relative_to(source_dir)
         rel_dir = "" if rel.as_posix() == "." else rel.as_posix()
         stem = source.name[: -len(".md")]
-        chunk_path = chunks_dir / rel / (stem + CHUNKS_SUFFIX)
+        doc_dir = chunks_dir / rel / stem
+        chunk_path = doc_dir / CHUNKS_NAME
         subject = "data/" + stem if not rel_dir else f"data/{rel_dir}/{stem}"
         if not chunk_path.is_file():
             out.append(PendingFile(subject, source, rel_dir, "new"))
             continue
-        report = chunks_dir / rel / (stem + REPORT_SUFFIX)
+        report = doc_dir / REPORT_NAME
         recorded = _report_sha256(report)
         if recorded:
             current = _sha256_text(source)
@@ -160,20 +164,44 @@ def scan_pending(cfg: Config, now: float | None = None) -> list[PendingFile]:
 
 # -- 单文件切块 -------------------------------------------------------------
 def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
-    """起子进程切一个文件，返回结果字典（不抛异常，失败也返回）。"""
+    """起子进程切一个文件，返回结果字典（不抛异常，失败也返回）。
+
+    引擎按源文件名把三件套平铺写进 ``--out-dir``；这里先落到
+    ``<data_root>/.tmp_chunk/<名>/``，成功后原子搬进
+    ``<data_root>/chunks/<分组>/<名>/{chunks,extras,report}.jsonl``。
+    """
     root = Path(cfg.data_root)
     source_dir = root / "source"
-    out_dir = root / "chunks"
-    if item.rel_dir:
-        out_dir = out_dir / item.rel_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
+    chunks_root = root / "chunks"
+    doc_dir = (
+        chunks_root / item.source.stem
+        if not item.rel_dir
+        else chunks_root / item.rel_dir / item.source.stem
+    )
+    tmp_dir = root / ".tmp_chunk" / item.source.stem
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        for stale in tmp_dir.iterdir():
+            if stale.is_file():
+                stale.unlink()
+    except OSError as exc:
+        return {
+            "subject": item.subject,
+            "ok": False,
+            "gate_ok": False,
+            "n_chunks": 0,
+            "kinds": {},
+            "failures": [],
+            "message": f"无法创建临时切块目录：{exc}",
+            "seconds": 0.0,
+        }
     cmd = [
         sys.executable,
         "-m",
         CLI_MODULE,
         str(item.source),
         "--out-dir",
-        str(out_dir),
+        str(tmp_dir),
         "--source-root",
         str(source_dir),
         "--strategy",
@@ -211,9 +239,11 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
     except subprocess.TimeoutExpired:
         result["message"] = f"切块超时（>{DEFAULT_TIMEOUT}s）"
         result["seconds"] = round(time.time() - started, 2)
+        _cleanup_tmp(tmp_dir)
         return result
     except OSError as exc:
         result["message"] = f"无法启动切块引擎：{exc}"
+        _cleanup_tmp(tmp_dir)
         return result
 
     result["seconds"] = round(time.time() - started, 2)
@@ -247,7 +277,34 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
             result["message"] = (proc.stderr or proc.stdout or "").strip()[-400:]
     if proc.returncode == 2 and not result["failures"]:
         result["message"] = "gate 未通过"
+    if result["ok"]:
+        err = _publish_tmp(tmp_dir, doc_dir, item.source.stem)
+        if err:
+            result["ok"] = False
+            result["message"] = err
+    _cleanup_tmp(tmp_dir)
     return result
+
+
+def _publish_tmp(tmp_dir: Path, doc_dir: Path, stem: str) -> str:
+    """把临时目录里的三件套搬进文档目录；返回错误消息（空串=成功）。"""
+    try:
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        for src_name, dst_name in (
+            (stem + CHUNKS_SUFFIX, CHUNKS_NAME),
+            (stem + EXTRAS_SUFFIX, EXTRAS_NAME_LOCAL),
+            (stem + REPORT_SUFFIX, REPORT_NAME),
+        ):
+            src = tmp_dir / src_name
+            if src.is_file():
+                os.replace(src, doc_dir / dst_name)
+    except OSError as exc:
+        return f"切块产物落位失败：{exc}"
+    return ""
+
+
+def _cleanup_tmp(tmp_dir: Path) -> None:
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # -- 自动/手动队列 ----------------------------------------------------------

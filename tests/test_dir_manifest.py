@@ -38,8 +38,8 @@ class DirManifestTest(unittest.TestCase):
         self.assertTrue(payload["groups"][0]["files"][0]["local"])
 
     def test_subdir_becomes_group(self) -> None:
-        sub = self.data_root / "chunks" / "子目录"
-        sub.mkdir(parents=True)
+        doc_dir = self.data_root / "chunks" / "子目录" / "子目录法"
+        doc_dir.mkdir(parents=True)
         chunk = {
             "id": "子目录法-0001",
             "chunk": "内容",
@@ -47,7 +47,7 @@ class DirManifestTest(unittest.TestCase):
             "law_num": "1",
             "chunk_kind": "paragraph",
         }
-        (sub / "子目录法.chunks.jsonl").write_text(
+        (doc_dir / "chunks.jsonl").write_text(
             __import__("json").dumps(chunk, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         manifest = DirManifest(self.data_root)
@@ -68,7 +68,8 @@ class DirManifestTest(unittest.TestCase):
         self.assertIn("测试包法规", manifest.source_text("data/测试包法规"))
         path = manifest.chunk_file("data/测试包法规")
         self.assertTrue(path.is_file())
-        self.assertEqual(path.name, "测试包法规.chunks.jsonl")
+        self.assertEqual(path.name, "chunks.jsonl")
+        self.assertEqual(path.parent.name, "测试包法规")
 
     def test_nested_extras_format(self) -> None:
         """FAC-RAG 风格的 {"id","extras"} 嵌套侧车也能解析（不只是平铺）。"""

@@ -25,6 +25,11 @@ CHUNKS_SUFFIX = ".chunks.jsonl"
 EXTRAS_SUFFIX = ".extras.jsonl"
 REPORT_SUFFIX = ".report.json"
 
+#: 一个文档一个文件夹后的产物文件名（``<data_root>/chunks/<分组>/<名>/``）。
+CHUNKS_NAME = "chunks.jsonl"
+EXTRAS_NAME_LOCAL = "extras.jsonl"
+REPORT_NAME = "report.json"
+
 
 class ManifestError(RuntimeError):
     """产物目录不可用（不存在 / 缺 manifest / 格式不对）。"""
@@ -228,9 +233,14 @@ class DirManifest:
     --------
     ``<data_root>/source/``
         源 .md 文件（可带子目录，子目录名会拼进分组）
-    ``<data_root>/chunks/``
-        ``<名>.chunks.jsonl``（必需，每行一个 chunk）
-        ``<名>.extras.jsonl``（可选，每行一个 chunk 的侧车，字段平铺）
+    ``<data_root>/chunks/<分组>/<名>/``
+        ``chunks.jsonl``（必需，每行一个 chunk）
+        ``extras.jsonl``（可选，每行一个 chunk 的侧车，字段平铺或嵌套）
+        ``report.json``（可选，切块引擎的决策日志，含 gate/source_sha256）
+    ``<data_root>/draft/``
+        未提交草稿（``<名>.<基线sha12>.chunks.jsonl``），不属于正式产物
+    ``<data_root>/backup/``
+        提交前旧版备份（``<名>.<时间戳>.chunks.jsonl``）
 
     与 :class:`Manifest` 的差异：没有 JSON 清单文件，所有统计开服时现算；
     ``gate`` / ``warnings`` / ``sha256`` 没有上游数据，统一留空。
@@ -242,6 +252,8 @@ class DirManifest:
         self.data_root = Path(data_root)
         self.source_dir = self.data_root / "source"
         self.chunks_dir = self.data_root / "chunks"
+        self.draft_dir = self.data_root / "draft"
+        self.backup_dir = self.data_root / "backup"
         self.generated_at: str = ""
         self.engine: str = "local-dirs"
         self.workspace: str = str(self.data_root)
@@ -260,11 +272,12 @@ class DirManifest:
         total_chars = 0
         total_source = 0
         merged_kinds: dict[str, int] = {}
-        for path in sorted(self.chunks_dir.rglob("*" + CHUNKS_SUFFIX)):
+        for path in sorted(self.chunks_dir.rglob(CHUNKS_NAME)):
             if not path.is_file():
                 continue
-            name = path.name[: -len(CHUNKS_SUFFIX)]
-            rel = path.parent.relative_to(self.chunks_dir)
+            doc_dir = path.parent
+            name = doc_dir.name
+            rel = doc_dir.parent.relative_to(self.chunks_dir)
             group = "data" if rel.as_posix() == "." else "data/" + rel.as_posix()
             key = f"{group}/{name}"
             source = self.source_dir / rel / (name + ".md")
@@ -284,10 +297,10 @@ class DirManifest:
                 source_chars = len(source.read_text(encoding="utf-8"))
                 total_source += source_chars
             total_chars += chars
-            extras_path = path.with_name(name + EXTRAS_SUFFIX)
+            extras_path = doc_dir / EXTRAS_NAME_LOCAL
             extras_count = _count_lines(extras_path)
             coverage = round(chars / source_chars, 4) if source_chars else 0.0
-            report = _scan_report(path.with_name(name + REPORT_SUFFIX))
+            report = _scan_report(doc_dir / REPORT_NAME)
             gate_ok = report.get("gate_ok", True) if report else True
             for failure in report.get("failures", []):
                 warnings.append(f"gate：{failure}")
@@ -345,9 +358,13 @@ class DirManifest:
     def chunk_file(self, key: str) -> Path:
         return Path(self.get(key).jsonl)
 
+    def document_dir(self, key: str) -> Path:
+        """该文档的产物目录（``<chunks_dir>/<分组>/<名>/``）。"""
+        return Path(self.get(key).jsonl).parent
+
     def extras_for(self, key: str) -> dict[str, dict]:
         entry = self.get(key)
-        path = Path(entry.jsonl).with_name(entry.law_name + EXTRAS_SUFFIX)
+        path = Path(entry.jsonl).parent / EXTRAS_NAME_LOCAL
         if path not in self._extras_cache:
             extras: dict[str, dict] = {}
             if path.is_file():
@@ -391,6 +408,8 @@ class DirManifest:
             "mode": self.mode,
             "chunks_dir": str(self.chunks_dir),
             "source_dir": str(self.source_dir),
+            "draft_dir": str(self.draft_dir),
+            "backup_dir": str(self.backup_dir),
             "generated_at": self.generated_at,
             "engine": self.engine,
             "totals": {
