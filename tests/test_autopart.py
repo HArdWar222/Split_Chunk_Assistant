@@ -227,5 +227,75 @@ class MaterializeTest(unittest.TestCase):
         self.assertEqual(out[0]["part_total"], len(parts) - 1)
 
 
+class MixedMaterializeTest(unittest.TestCase):
+    """段落块 + 表格块合并成超长块：按类型边界拆成段落块 + 表格块。"""
+
+    def row(self, number):
+        return (
+            f"编号：{number} · 违法行为：测试违法行为{number} · 处罚依据：依据第{number}条"
+            + "内容" * 20
+        )
+
+    def test_mixed_merge_splits_into_paragraph_and_tables(self):
+        header = ["第二部分 裁量细则", "第二部分 裁量细则 · 表A.1"]
+        rows = [self.row(1), self.row(2)]
+        originals = [
+            make_chunk(
+                "测试法-0030",
+                "第二部分 裁量细则 · 表A.1\n" + rows[0],
+                law_num="表A.1 第1-1行",
+                kind="table",
+                span=[20, 20],
+            ),
+            make_chunk(
+                "测试法-0031",
+                "第二部分 裁量细则 · 表A.1\n" + rows[1],
+                law_num="表A.1 第2-2行",
+                kind="table",
+                span=[20, 20],
+            ),
+        ]
+        originals[0]["extras"]["table_grid"] = {"headers": ["编号", "违法行为"], "rows": [["1", "测试"]]}
+        merged = make_chunk(
+            "测试法-0040",
+            "\n".join(header + [rows[0], header[1], rows[1]]),
+            law_num="第二部分 裁量细则",
+            kind="paragraph",
+            span=[19, 20],
+        )
+        merged["manual"] = True
+        merged["align"] = "approx"
+        self.assertGreater(len(merged["chunk"]), 150)
+
+        out = materialize_chunks([merged], max_chars=150, min_chars=40, originals=originals)
+        self.assertGreaterEqual(len(out), 3)
+        kinds = [item["chunk_kind"] for item in out]
+        self.assertEqual(kinds[0], "paragraph")
+        self.assertEqual(kinds[1:], ["table", "table"])
+        # 段落部分保留标题，表格部分按行拆、行号/侧车从原始表格块找回
+        self.assertTrue(out[0]["chunk"].startswith("第二部分 裁量细则"))
+        for number, item in enumerate(out[1:], start=1):
+            self.assertEqual(item["law_num"], f"表A.1 第{number}-{number}行")
+            self.assertEqual(item["span"], [20, 20])
+            self.assertTrue(item["chunk"].startswith("第二部分 裁量细则 · 表A.1\n"))
+            self.assertTrue(item["manual"])
+        self.assertEqual(out[1]["extras"]["table_grid"]["headers"], ["编号", "违法行为"])
+        ids = [item["id"] for item in out]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_pure_table_unchanged_by_mixed_logic(self):
+        rows = [self.row(1), self.row(2), self.row(3)]
+        chunk = make_chunk(
+            "测试法-0050",
+            "测试法 · 表A.2\n" + "\n".join(rows),
+            law_num="表A.2 第1-3行",
+            kind="table",
+            span=[30, 30],
+        )
+        out = materialize_chunks([chunk], max_chars=120, min_chars=40)
+        self.assertGreaterEqual(len(out), 2)
+        self.assertTrue(all(item["chunk_kind"] == "table" for item in out))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -303,17 +303,198 @@ def _annotate_part_spans(
         cursor = end + 1
 
 
+RE_TABLE_ROW_LINE = re.compile(r"^(编号|序号|栏号|项目|类别)\s*[:：]")
+
+#: 表格行正文里常见的字段分隔符（合并块的表格段每行都带这几个键）。
+_TABLE_ROW_FIELDS = ("违法行为", "法律规定", "处罚依据", "裁量阶次", "适用条件", "处罚标准")
+
+
+def _is_table_row_line(line: str) -> bool:
+    """判断一行是不是「表格行」正文（``编号：1 · 违法行为：…`` 这种）。
+
+    只认一眼能看出是表格行的：以编号/序号/栏号等开头、且带 `` · `` 字段分隔，
+    或者一行里同时出现两个以上表格字段名。避免把普通正文误判成表格行。
+    """
+    text = str(line or "").strip()
+    if not text or " · " not in text:
+        return False
+    if RE_TABLE_ROW_LINE.match(text):
+        return True
+    return sum(1 for field in _TABLE_ROW_FIELDS if field + "：" in text) >= 2
+
+
+def _looks_like_heading(line: str) -> bool:
+    """合并块开头的「标题/面包屑」行：短、没有句号、不是表格行。"""
+    text = str(line or "").strip()
+    if not text or len(text) > 160:
+        return False
+    if "。" in text:
+        return False
+    return not _is_table_row_line(text)
+
+
+def _table_origin_index(originals: list[dict] | None) -> dict[str, dict]:
+    """原始（物化前）表格块索引：按正文最后一行的规范文本找块信息。
+
+    合并块里的表格行就是原来某个表格块的正文行；靠它把行号区间/侧车信息
+    找回来，拆出来的表格块才能写回 ``表X 第a-b行``。
+    """
+    index: dict[str, dict] = {}
+    for chunk in originals or []:
+        if str(chunk.get("chunk_kind") or "") != "table":
+            continue
+        body_lines = str(chunk.get("chunk") or "").split("\n")
+        if not body_lines:
+            continue
+        key = _norm_line(body_lines[-1])
+        if key:
+            index.setdefault(key, chunk)
+    return index
+
+
+def split_mixed_chunk(
+    chunks: list[dict],
+    index: int,
+    max_chars: int,
+    min_chars: int,
+    originals: list[dict] | None = None,
+    source_lines: list[str] | None = None,
+) -> list[dict] | None:
+    """把「文本 + 表格」混合的超长块按类型边界拆开（用户 m10872 定的方案）。
+
+    - 文本段 → 普通段落块（过长再均分 part）；
+    - 表格段 → 每个表格行一个独立表格块，行号区间/表格侧车从原始表格块找回；
+    - 面包屑只在第一块出现；
+    - 不是混合块（只有一种类型）时返回 None，交给原来的拆分逻辑。
+    """
+    chunk = chunks[index]
+    body = normalize_text(chunk.get("chunk") or "")
+    if len(body) <= max_chars:
+        return None
+    lines = [line for line in body.split("\n") if line.strip()]
+    if not lines:
+        return None
+
+    header: list[str] = []
+    rest: list[str] = []
+    for line in lines:
+        text = line.strip()
+        if not rest and _looks_like_heading(text):
+            header.append(text)
+            continue
+        rest.append(line)
+    if not rest:
+        return None
+
+    segments: list[tuple[str, list[str]]] = []
+    for line in rest:
+        # 合并时每个表格块的正文开头都带一遍自己的面包屑（与 header 末行相同），
+        # 这些重复行不参与分段，否则会被当成「文本段」多分出一块。
+        if header and line.strip() == header[-1].strip():
+            continue
+        kind = "table" if _is_table_row_line(line) else "text"
+        if segments and segments[-1][0] == kind:
+            segments[-1][1].append(line)
+        else:
+            segments.append((kind, [line]))
+    kinds = {kind for kind, _ in segments}
+    header_seg_inserted = False
+    if len(kinds) < 2:
+        # 合并块的「段落部分」可能只有标题/面包屑（例如段落块正文就是
+        # 「第二部分 裁量细则」一行）；标题被 header 吃掉后只剩表格段，
+        # 这时把 header 补成一个段落段，仍按类型边界拆。
+        if str(chunk.get("chunk_kind") or "") == "table" or not header:
+            return None
+        segments.insert(0, ("text", list(header)))
+        header_seg_inserted = True
+
+    origin_index = _table_origin_index(originals)
+    used = {str(c.get("id")) for c in chunks}
+    seq = max_seq(chunks)
+    out: list[dict] = []
+
+    def take_id() -> str:
+        nonlocal seq
+        seq += 1
+        candidate = f"{str(chunk.get('law_name') or 'chunk')}-{seq:04d}"
+        while candidate in used:
+            seq += 1
+            candidate = f"{str(chunk.get('law_name') or 'chunk')}-{seq:04d}"
+        used.add(candidate)
+        return candidate
+
+    first = True
+    for kind, seg_lines in segments:
+        if kind == "text":
+            text = "\n".join(seg_lines)
+            if first and header and not header_seg_inserted:
+                text = "\n".join(header) + "\n" + text
+            parts = split_text_parts(text, max_chars, min_chars) if len(text) > max_chars else [text]
+            text_items: list[dict] = []
+            for number, part_text in enumerate(parts, start=1):
+                item = _copy(chunk)
+                item["id"] = str(chunk.get("id") or "") if first and number == 1 else take_id()
+                item["chunk_kind"] = "paragraph"
+                item["part_index"] = number if len(parts) > 1 else 1
+                item["part_total"] = len(parts) if len(parts) > 1 else 1
+                _derive(item, text=part_text)
+                item["manual"] = True
+                item["align"] = chunk.get("align") or "approx"
+                item["span"] = list(chunk["span"]) if chunk.get("span") else None
+                text_items.append(item)
+            if len(text_items) > 1:
+                _annotate_part_spans(text_items, chunk, source_lines)
+            out.extend(text_items)
+            first = False
+            continue
+
+        crumb = header[-1] if header else ""
+        for row_line in seg_lines:
+            item = _copy(chunk)
+            item["id"] = str(chunk.get("id") or "") if first else take_id()
+            item["chunk_kind"] = "table"
+            item["part_index"] = 1
+            item["part_total"] = 1
+            text = (crumb + "\n" if crumb else "") + row_line.strip()
+            _derive(item, text=text)
+            item["manual"] = True
+            info = origin_index.get(_norm_line(row_line))
+            if info:
+                item["law_num"] = str(info.get("law_num") or "")
+                item["span"] = list(info["span"]) if info.get("span") else None
+                item["align"] = info.get("align") or "approx"
+                origin_extras = info.get("extras") if isinstance(info.get("extras"), dict) else {}
+                extras = dict(item.get("extras") or {})
+                for key in ("table_grid", "table_label", "table_title", "table_rows", "table_mode"):
+                    if key in origin_extras:
+                        extras[key] = origin_extras[key]
+                item["extras"] = extras
+            else:
+                item["law_num"] = str(chunk.get("law_num") or "")
+                item["span"] = list(chunk["span"]) if chunk.get("span") else None
+                item["align"] = "approx"
+            out.append(item)
+            first = False
+
+    return out if len(out) >= 2 else None
+
+
 def materialize_chunks(
     chunks: list[dict],
     max_chars: int = DEFAULT_MAX_CHARS,
     min_chars: int = DEFAULT_MIN_PART_CHARS,
     source_lines: list[str] | None = None,
+    originals: list[dict] | None = None,
 ) -> list[dict]:
     """把超长块**真正拆开**（文本 → ``-pN`` 块；多行表格 → 行区间块）。
 
     与 ``auto_part_chunks`` 的区别：这里产出的是真实块（id / part 字段 /
     span / part_span 都写进块里），后续命令可以直接按 part 操作、撤销重放
     也能复现同一个结果；``auto_part_chunks`` 只用于「不编辑时的展示」的旧路径。
+
+    文本与表格混在一起的合并块（合并了段落 + 表格）走 ``split_mixed_chunk``：
+    按类型边界拆成段落块与表格块，表格块从 ``originals``（物化前的原始块）
+    找回行号区间与表格侧车。
     """
     max_chars = max(int(max_chars or DEFAULT_MAX_CHARS), 50)
     min_chars = max(int(min_chars or DEFAULT_MIN_PART_CHARS), 20)
@@ -324,6 +505,11 @@ def materialize_chunks(
         already = int(chunk.get("part_total") or 1) > 1
         if len(text) <= max_chars or already:
             out.append(chunk)
+            continue
+        mixed = split_mixed_chunk(chunks, index, max_chars, min_chars, originals, source_lines)
+        if mixed:
+            out.extend(mixed)
+            changed = True
             continue
         kind = str(chunk.get("chunk_kind") or "")
         if kind == "table":

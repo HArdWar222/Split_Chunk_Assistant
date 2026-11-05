@@ -460,7 +460,13 @@ class Studio:
         raw_lines = base.get("_raw_lines") or []
 
         def run(chunks: list[dict]) -> list[dict]:
-            return materialize_chunks(chunks, max_chars, min_chars, raw_lines)
+            return materialize_chunks(
+                chunks,
+                max_chars,
+                min_chars,
+                raw_lines,
+                originals=base.get("chunks"),
+            )
 
         return run
 
