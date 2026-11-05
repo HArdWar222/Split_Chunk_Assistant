@@ -276,6 +276,11 @@ class Studio:
             }
         bridge = bridges[0]
         payload = bridge.manifest.payload()
+        for group in payload.get("groups") or []:
+            for item in group.get("files") or []:
+                draft = self.draft_payload(item.get("key") or "")
+                item["draft"] = bool(draft.get("exists"))
+                item["draft_stale"] = bool(draft.get("stale"))
         payload.update(
             {
                 "ok": True,

@@ -34,7 +34,8 @@
     rowPickMoved: false, // 本次按下后是否真的拖动过
     suppressNextClick: false, // 拖选/Shift 选行后吞掉紧随其后的 click
     rowPickClick: false,      // 本次 mousedown 是否是「单击」（未按 Shift）
-    programmaticScroll: 0 // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
+    programmaticScroll: 0, // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
+    draftTimer: 0 // 草稿自动保存的防抖定时器
   };
 
   var el = {
@@ -55,6 +56,11 @@
     btnRedo: document.getElementById("btn-redo"),
     dirty: document.getElementById("dirty"),
     diff: document.getElementById("diff"),
+    draftBadge: document.getElementById("draft-badge"),
+    btnSaveDraft: document.getElementById("btn-save-draft"),
+    btnCommit: document.getElementById("btn-commit"),
+    btnDiscard: document.getElementById("btn-discard"),
+    btnExport: document.getElementById("btn-export"),
     btnAdd: document.getElementById("btn-add"),
     btnReset: document.getElementById("btn-reset"),
     chunksHint: document.getElementById("chunks-hint"),
@@ -699,6 +705,7 @@
         } else if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
         else if (file.gate_ok === true) badges.push("<span class='badge badge-ok'>gate ✓</span>");
         if (file.n_warnings > 0) badges.push("<span class='badge badge-warn'>warning " + file.n_warnings + "</span>");
+        if (file.draft) badges.push("<span class='badge badge-draft' title='有未提交的草稿'>草稿</span>");
 
         btn.innerHTML =
           "<span class='name'>" + escapeHtml(file.law_name) + "</span>" +
@@ -773,6 +780,10 @@
   }
 
   function loadDoc(file) {
+    // 切文件前把未保存的编辑补存成草稿（草稿按文件保存，回来时自动恢复）
+    if (state.doc && state.doc.dirty && state.doc.key && state.doc.key !== file.key) {
+      flushDraft(state.doc.key);
+    }
     hideSplitCaret();
     hideRowPick();
     var seq = (loadDoc._seq = (loadDoc._seq || 0) + 1);
@@ -2457,8 +2468,114 @@
     el.chunksHint.hidden = !dirty;
     el.btnReset.disabled = !dirty;
     el.chunksHint.textContent = dirty
-      ? ("手工修改只在内存里（共 " + edits.n_ops + " 条命令，可撤销）；刷新页面不丢，关服务才丢；P3 才落盘。")
-      : "";
+      ? ("手工修改会自动保存为草稿（2 秒防抖，Ctrl+S 立即保存）；提交后才覆盖正式 chunks.jsonl。")
+      : (doc && doc.draft && doc.draft.exists
+        ? ("已恢复草稿（未提交）：继续编辑会自动保存；点「提交」覆盖正式切片，或「放弃」回到基线。")
+        : "");
+    updateDraftBadge(doc);
+    scheduleDraftAutosave();
+  }
+
+  // ---------- P3 草稿 ----------
+  function draftInfo(doc) {
+    return (doc && doc.draft) || { exists: false, stale: false, baseline12: "", saved_at: 0 };
+  }
+
+  function updateDraftBadge(doc) {
+    if (!el.draftBadge) return;
+    var d = draftInfo(doc);
+    var label = "";
+    var cls = "";
+    if (!doc) {
+      el.draftBadge.hidden = true;
+    } else if (doc.dirty) {
+      label = "● 有未保存修改";
+      cls = "dirty";
+    } else if (d.stale) {
+      label = "⚠ 草稿已过期";
+      cls = "stale";
+    } else if (d.exists) {
+      label = "草稿已保存未提交";
+      cls = "saved";
+    }
+    el.draftBadge.hidden = !label;
+    el.draftBadge.textContent = label;
+    el.draftBadge.className = "draft-badge" + (cls ? " " + cls : "");
+    if (el.btnSaveDraft) el.btnSaveDraft.disabled = !doc || !doc.dirty;
+    if (el.btnCommit) el.btnCommit.disabled = !doc || (!doc.dirty && !(d.exists && !d.stale));
+    if (el.btnDiscard) el.btnDiscard.disabled = !doc || (!doc.dirty && !d.exists);
+    if (el.btnExport) el.btnExport.disabled = !doc;
+  }
+
+  function scheduleDraftAutosave() {
+    if (state.draftTimer) { clearTimeout(state.draftTimer); state.draftTimer = 0; }
+    if (!state.doc || !state.doc.dirty) return;
+    var key = state.doc.key;
+    state.draftTimer = setTimeout(function () {
+      state.draftTimer = 0;
+      if (state.doc && state.doc.key === key && state.doc.dirty) saveDraft({ silent: true });
+    }, 2000);
+  }
+
+  function flushDraft(key) {
+    if (!key) return;
+    if (state.draftTimer) { clearTimeout(state.draftTimer); state.draftTimer = 0; }
+    postJSON("/api/draft/save", { key: key }).catch(function () { /* 切文件优先，失败下次再存 */ });
+  }
+
+  function saveDraft(opts) {
+    opts = opts || {};
+    if (!state.docKey) return Promise.resolve();
+    if (state.draftTimer) { clearTimeout(state.draftTimer); state.draftTimer = 0; }
+    return postJSON("/api/draft/save", { key: state.docKey }).then(function (doc) {
+      applyDocPayload(doc);
+      if (!opts.silent) {
+        showToast("草稿已保存，提交后才覆盖正式切片", "ok");
+      }
+      setStatus("草稿已保存 · " + fmtInt(doc.stats.n_chunks) + " 块 · 未提交", "ok");
+      return doc;
+    }).catch(function (err) {
+      opFailed(err);
+    });
+  }
+
+  function commitDraftAction() {
+    if (!state.docKey || !state.doc) return;
+    var d = draftInfo(state.doc);
+    if (!state.doc.dirty && !(d.exists && !d.stale)) return;
+    if (!window.confirm("提交后会用当前切片覆盖正式 chunks.jsonl（旧文件先备份到 data/backup）。继续？")) return;
+    postJSON("/api/draft/commit", { key: state.docKey }).then(function (doc) {
+      applyDocPayload(doc);
+      showToast(doc.message || "已提交", "ok");
+      setStatus((doc.message || "已提交") + " · 正式产物已更新", "ok");
+      loadFiles();
+    }).catch(function (err) { opFailed(err); });
+  }
+
+  function discardDraftAction() {
+    if (!state.docKey || !state.doc) return;
+    if (!window.confirm("放弃草稿并回到自动切块基线？本文件在内存里的修改也会一起丢弃。")) return;
+    postJSON("/api/draft/discard", { key: state.docKey }).then(function (doc) {
+      applyDocPayload(doc);
+      showToast("已放弃草稿，回到基线", "ok");
+      loadFiles();
+    }).catch(function (err) { opFailed(err); });
+  }
+
+  function exportChunks() {
+    if (!state.docKey) return;
+    getJSON("/api/export?key=" + encodeURIComponent(state.docKey)).then(function (res) {
+      var blob = new Blob([res.content], { type: "application/x-ndjson;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename || "chunks.jsonl";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      showToast("已导出 " + fmtInt(res.n_chunks) + " 块 · " + res.filename, "ok");
+    }).catch(function (err) { opFailed(err); });
   }
 
   // 编辑会重建原文 DOM，表格内部的滚动容器（.tblwrap）默认回到顶部；
@@ -3357,6 +3474,10 @@
     el.btnUndo.addEventListener("click", doUndo);
     el.btnRedo.addEventListener("click", doRedo);
     el.btnReset.addEventListener("click", doReset);
+    if (el.btnSaveDraft) el.btnSaveDraft.addEventListener("click", function () { saveDraft(); });
+    if (el.btnCommit) el.btnCommit.addEventListener("click", commitDraftAction);
+    if (el.btnDiscard) el.btnDiscard.addEventListener("click", discardDraftAction);
+    if (el.btnExport) el.btnExport.addEventListener("click", exportChunks);
     el.btnAdd.addEventListener("click", function (ev) {
     ev.preventDefault();
     var picked = selectedTableRows();
@@ -3395,6 +3516,11 @@
       if (mod && key === "k") {
         ev.preventDefault();
         el.search.focus();
+        return;
+      }
+      if (mod && key === "s") {
+        ev.preventDefault();
+        if (state.doc && state.doc.dirty) saveDraft();
         return;
       }
       if (typing) return;

@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.27-p3a">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.28-p3b">
 </head>
 <body>
   <header class="topbar">
@@ -15,6 +15,7 @@
     </div>
     <div class="status" id="status">加载中…</div>
     <div class="edit-tools">
+      <span class="draft-badge" id="draft-badge" hidden></span>
       <span class="dirty" id="dirty" hidden>● 未保存</span>
       <span class="diff" id="diff" title="相对自动切块基线：+ 新增 ~ 修改 - 删除">+0 ~0 -0</span>
       <button id="btn-undo" type="button" class="btn" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
@@ -22,6 +23,10 @@
     </div>
     <div class="actions">
       <span class="watch-chip" id="watch-chip" hidden></span>
+      <button id="btn-save-draft" type="button" class="btn" title="把当前编辑存成草稿（Ctrl+S），稍后再回来继续">保存草稿</button>
+      <button id="btn-commit" type="button" class="btn btn-primary" title="提交草稿：校验基线 → 备份 → 覆盖正式 chunks.jsonl" disabled>提交</button>
+      <button id="btn-discard" type="button" class="btn" title="放弃草稿，回到自动切块基线" disabled>放弃</button>
+      <button id="btn-export" type="button" class="btn" title="导出当前（含未提交修改）的 chunks.jsonl" disabled>导出</button>
       <button id="btn-chunk" type="button" class="btn" title="扫描 data/source 里还没切块的文件并调用 SPLITCHUNK 切块">⚙ 切块</button>
       <button id="btn-refresh" type="button" class="btn">刷新</button>
       <button id="btn-settings" type="button" class="btn">⚙ 设置</button>
@@ -211,6 +216,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.27-p3a" defer></script>
+  <script src="/static/app.js?v=0.3.28-p3b" defer></script>
 </body>
 </html>
