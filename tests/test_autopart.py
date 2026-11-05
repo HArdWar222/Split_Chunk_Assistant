@@ -230,61 +230,108 @@ class MaterializeTest(unittest.TestCase):
 class MixedMaterializeTest(unittest.TestCase):
     """段落块 + 表格块合并成超长块：按类型边界拆成段落块 + 表格块。"""
 
-    def row(self, number):
-        return (
-            f"编号：{number} · 违法行为：测试违法行为{number} · 处罚依据：依据第{number}条"
-            + "内容" * 20
-        )
+    crumb = "工作表格 · 表A.3 XX岗位职责清单（作业岗位）"
 
     def test_mixed_merge_splits_into_paragraph_and_tables(self):
-        header = ["第二部分 裁量细则", "第二部分 裁量细则 · 表A.1"]
-        rows = [self.row(1), self.row(2)]
+        rows = [
+            "工种：岗位信息 · 爆破工(示例)：岗位职责 · 履责要求：示例一",
+            "工种：使用爆破器材进行爆破作业(示例) · 爆破工(示例)：岗位职责 · 履责要求：示例二",
+        ]
+        header = ["工作地点： ××中段××分层××采场", self.crumb]
         originals = [
             make_chunk(
                 "测试法-0030",
-                "第二部分 裁量细则 · 表A.1\n" + rows[0],
-                law_num="表A.1 第1-1行",
+                self.crumb + "\n" + rows[0],
+                law_num="表A.3 第1-1行",
                 kind="table",
                 span=[20, 20],
             ),
             make_chunk(
                 "测试法-0031",
-                "第二部分 裁量细则 · 表A.1\n" + rows[1],
-                law_num="表A.1 第2-2行",
+                self.crumb + "\n" + rows[1],
+                law_num="表A.3 第2-2行",
                 kind="table",
                 span=[20, 20],
             ),
         ]
-        originals[0]["extras"]["table_grid"] = {"headers": ["编号", "违法行为"], "rows": [["1", "测试"]]}
+        originals[0]["extras"]["table_grid"] = {"headers": ["工种", "岗位信息"], "rows": [["爆破工", "岗位信息"]]}
         merged = make_chunk(
             "测试法-0040",
-            "\n".join(header + [rows[0], header[1], rows[1]]),
-            law_num="第二部分 裁量细则",
+            "\n".join(header + [rows[0], self.crumb, rows[1]]),
+            law_num="段40",
             kind="paragraph",
             span=[19, 20],
         )
         merged["manual"] = True
         merged["align"] = "approx"
-        self.assertGreater(len(merged["chunk"]), 150)
 
-        out = materialize_chunks([merged], max_chars=150, min_chars=40, originals=originals)
+        out = materialize_chunks([merged], max_chars=80, min_chars=30, originals=originals)
         self.assertGreaterEqual(len(out), 3)
         kinds = [item["chunk_kind"] for item in out]
         self.assertEqual(kinds[0], "paragraph")
         self.assertEqual(kinds[1:], ["table", "table"])
         # 段落部分保留标题，表格部分按行拆、行号/侧车从原始表格块找回
-        self.assertTrue(out[0]["chunk"].startswith("第二部分 裁量细则"))
+        self.assertTrue(out[0]["chunk"].startswith("工作地点： ××中段××分层××采场"))
         for number, item in enumerate(out[1:], start=1):
-            self.assertEqual(item["law_num"], f"表A.1 第{number}-{number}行")
+            self.assertEqual(item["law_num"], f"表A.3 第{number}-{number}行")
             self.assertEqual(item["span"], [20, 20])
-            self.assertTrue(item["chunk"].startswith("第二部分 裁量细则 · 表A.1\n"))
+            self.assertTrue(item["chunk"].startswith(self.crumb + "\n"))
             self.assertTrue(item["manual"])
-        self.assertEqual(out[1]["extras"]["table_grid"]["headers"], ["编号", "违法行为"])
+        self.assertEqual(out[1]["extras"]["table_grid"]["headers"], ["工种", "岗位信息"])
         ids = [item["id"] for item in out]
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_table_rows_grouped_by_origin_chunk_and_grid_restored(self):
+        """同一原始表格块的多行要合成一个块；table_grid 不随基线块下发，由参数补回。"""
+        rows_a = [
+            "工种：岗位信息 · 爆破工(示例)：岗位职责 · 履责要求：示例一",
+            "工种：岗位信息 · 爆破工(示例)：岗位职责 · 履责要求：示例二",
+        ]
+        rows_b = ["工种：岗位信息 · 爆破工(示例)：岗位职责 · 履责要求：示例三"]
+        originals = [
+            make_chunk(
+                "测试法-0060",
+                self.crumb + "\n" + "\n".join(rows_a),
+                law_num="表A.3 第1-2行",
+                kind="table",
+                span=[20, 20],
+            ),
+            make_chunk(
+                "测试法-0061",
+                self.crumb + "\n" + rows_b[0],
+                law_num="表A.3 第3-3行",
+                kind="table",
+                span=[20, 20],
+            ),
+        ]
+        grid_a = {"headers": ["工种", "岗位信息"], "rows": [["爆破工", "岗位信息"]]}
+        grids = {"测试法-0060": grid_a, "测试法-0061": {"headers": ["工种"], "rows": [["爆破工"]]}}
+        merged = make_chunk(
+            "测试法-0070",
+            "\n".join(
+                ["工作地点： ××", self.crumb] + rows_a + [self.crumb] + rows_b
+            ),
+            law_num="段70",
+            kind="paragraph",
+            span=[19, 20],
+        )
+        merged["manual"] = True
+        merged["align"] = "approx"
+
+        out = materialize_chunks([merged], max_chars=80, min_chars=30, originals=originals, grids=grids)
+        self.assertEqual([item["chunk_kind"] for item in out], ["paragraph", "table", "table"])
+        self.assertEqual(out[1]["law_num"], "表A.3 第1-2行")
+        self.assertEqual(out[2]["law_num"], "表A.3 第3-3行")
+        # 同块两行合成一块：正文里两行都在，块数不因行数增加
+        self.assertIn(rows_a[0], out[1]["chunk"])
+        self.assertIn(rows_a[1], out[1]["chunk"])
+        self.assertEqual(out[1]["extras"]["table_grid"], grid_a)
+
     def test_pure_table_unchanged_by_mixed_logic(self):
-        rows = [self.row(1), self.row(2), self.row(3)]
+        rows = [
+            f"工种：岗位信息{number} · 爆破工(示例)：岗位职责 · 履责要求：示例{number}"
+            for number in range(1, 4)
+        ]
         chunk = make_chunk(
             "测试法-0050",
             "测试法 · 表A.2\n" + "\n".join(rows),
@@ -292,7 +339,7 @@ class MixedMaterializeTest(unittest.TestCase):
             kind="table",
             span=[30, 30],
         )
-        out = materialize_chunks([chunk], max_chars=120, min_chars=40)
+        out = materialize_chunks([chunk], max_chars=80, min_chars=40)
         self.assertGreaterEqual(len(out), 2)
         self.assertTrue(all(item["chunk_kind"] == "table" for item in out))
 

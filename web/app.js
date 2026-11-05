@@ -335,7 +335,9 @@
   function chunkBodyHtml(chunk) {
     var raw = String(chunk.chunk === null || chunk.chunk === undefined ? "" : chunk.chunk);
     var tables = state.tables || {};
-    var grid = chunk.manual ? manualTableGrid(chunk) : tables[chunk.id];
+    var extras = chunk.extras || {};
+    var ownGrid = extras.table_grid && extras.table_grid.headers ? extras.table_grid : null;
+    var grid = ownGrid || (chunk.manual ? manualTableGrid(chunk) : tables[chunk.id]);
     if (grid) {
       return buildGridTableHtml(grid) +
         '<details class="chunk-raw"><summary>原始正文（送进检索的就是这段文字）</summary>' +

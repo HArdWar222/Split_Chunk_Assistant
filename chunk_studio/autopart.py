@@ -333,6 +333,25 @@ def _looks_like_heading(line: str) -> bool:
     return not _is_table_row_line(text)
 
 
+def _table_line_index(originals: list[dict] | None) -> dict[str, dict]:
+    """原始表格块索引：表格块正文的每一行 → 该块。
+
+    合并后正文里的表格行与原始表格块正文逐字一致（合并只是拼接），所以按行
+    建索引最可靠；不同表格的列名/字段各不相同（编号、工种、岗位信息……），
+    只靠 ``_is_table_row_line`` 的字段名单认不全。首行面包屑不参与索引。
+    """
+    index: dict[str, dict] = {}
+    for chunk in originals or []:
+        if str(chunk.get("chunk_kind") or "") != "table":
+            continue
+        body_lines = str(chunk.get("chunk") or "").split("\n")
+        for line in body_lines[1:]:
+            key = _norm_line(line)
+            if key:
+                index.setdefault(key, chunk)
+    return index
+
+
 def _table_origin_index(originals: list[dict] | None) -> dict[str, dict]:
     """原始（物化前）表格块索引：按正文最后一行的规范文本找块信息。
 
@@ -359,6 +378,7 @@ def split_mixed_chunk(
     min_chars: int,
     originals: list[dict] | None = None,
     source_lines: list[str] | None = None,
+    grids: dict[str, dict] | None = None,
 ) -> list[dict] | None:
     """把「文本 + 表格」混合的超长块按类型边界拆开（用户 m10872 定的方案）。
 
@@ -375,11 +395,13 @@ def split_mixed_chunk(
     if not lines:
         return None
 
+    line_index = _table_line_index(originals)
     header: list[str] = []
     rest: list[str] = []
     for line in lines:
         text = line.strip()
-        if not rest and _looks_like_heading(text):
+        known_row = bool(line_index.get(_norm_line(text)))
+        if not rest and not known_row and _looks_like_heading(text):
             header.append(text)
             continue
         rest.append(line)
@@ -392,7 +414,13 @@ def split_mixed_chunk(
         # 这些重复行不参与分段，否则会被当成「文本段」多分出一块。
         if header and line.strip() == header[-1].strip():
             continue
-        kind = "table" if _is_table_row_line(line) else "text"
+        is_row = bool(line_index.get(_norm_line(line))) or _is_table_row_line(line)
+        if is_row or (segments and segments[-1][0] == "table"):
+            # 已知表格行；或紧跟在表格行之后的续行（例如「注1:…」），
+            # 它们属于同一个原始表格块，不能当文本段。
+            kind = "table"
+        else:
+            kind = "text"
         if segments and segments[-1][0] == kind:
             segments[-1][1].append(line)
         else:
@@ -449,16 +477,35 @@ def split_mixed_chunk(
             continue
 
         crumb = header[-1] if header else ""
+        # 连续的行若来自同一个原始表格块，就合成一个表格块（保留该块的
+        # 表号行区间与 table_grid），而不是每行都切出一个块。
+        groups: list[tuple[dict | None, list[str]]] = []
         for row_line in seg_lines:
+            info = line_index.get(_norm_line(row_line)) or origin_index.get(_norm_line(row_line))
+            if groups and (info is groups[-1][0] or info is None):
+                groups[-1][1].append(row_line)
+            else:
+                groups.append((info, [row_line]))
+        for info, row_lines in groups:
             item = _copy(chunk)
             item["id"] = str(chunk.get("id") or "") if first else take_id()
             item["chunk_kind"] = "table"
             item["part_index"] = 1
             item["part_total"] = 1
-            text = (crumb + "\n" if crumb else "") + row_line.strip()
+            lines_out: list[str] = []
+            for row in row_lines:
+                text_row = row.strip()
+                if crumb and text_row.startswith(crumb):
+                    # 有些表格块把面包屑写进了行正文（「工作表格 · 表A.3 … · 注1:…」），
+                    # 表格段自己已经补了面包屑，这里去掉重复的一段。
+                    text_row = text_row[len(crumb):].lstrip()
+                    if text_row.startswith("·"):
+                        text_row = text_row.lstrip("·").strip()
+                if text_row:
+                    lines_out.append(text_row)
+            text = (crumb + "\n" if crumb else "") + "\n".join(lines_out)
             _derive(item, text=text)
             item["manual"] = True
-            info = origin_index.get(_norm_line(row_line))
             if info:
                 item["law_num"] = str(info.get("law_num") or "")
                 item["span"] = list(info["span"]) if info.get("span") else None
@@ -468,6 +515,10 @@ def split_mixed_chunk(
                 for key in ("table_grid", "table_label", "table_title", "table_rows", "table_mode"):
                     if key in origin_extras:
                         extras[key] = origin_extras[key]
+                origin_id = str(info.get("id") or "")
+                if grids and origin_id in grids:
+                    # table_grid 不随基线块下发（体积大），由 Studio 单独传入。
+                    extras["table_grid"] = grids[origin_id]
                 item["extras"] = extras
             else:
                 item["law_num"] = str(chunk.get("law_num") or "")
@@ -485,6 +536,7 @@ def materialize_chunks(
     min_chars: int = DEFAULT_MIN_PART_CHARS,
     source_lines: list[str] | None = None,
     originals: list[dict] | None = None,
+    grids: dict[str, dict] | None = None,
 ) -> list[dict]:
     """把超长块**真正拆开**（文本 → ``-pN`` 块；多行表格 → 行区间块）。
 
@@ -506,7 +558,7 @@ def materialize_chunks(
         if len(text) <= max_chars or already:
             out.append(chunk)
             continue
-        mixed = split_mixed_chunk(chunks, index, max_chars, min_chars, originals, source_lines)
+        mixed = split_mixed_chunk(chunks, index, max_chars, min_chars, originals, source_lines, grids)
         if mixed:
             out.extend(mixed)
             changed = True

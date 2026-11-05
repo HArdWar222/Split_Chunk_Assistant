@@ -408,6 +408,13 @@ class Studio:
             "stats": base_stats,
             # 私有：源文件原始行，用于编辑后给拆分块补行区间（不随 API 返回，不缓存到前端）
             "_raw_lines": lines,
+            # 私有：表块的完整 table_grid（按块 id），只给物化拆分时找回表格视图用；
+            # 基线块的公开 extras 不带 table_grid（体积大，前端另外走 /api/tables）。
+            "_grids": {
+                str(chunk_id): extra["table_grid"]
+                for chunk_id, extra in extras.items()
+                if isinstance(extra.get("table_grid"), dict)
+            },
             "manifest": {
                 "n_chunks": entry.n_chunks,
                 "gate_ok": entry.gate_ok,
@@ -458,6 +465,7 @@ class Studio:
         max_chars = self.cfg.max_chars
         min_chars = self.cfg.min_part_chars
         raw_lines = base.get("_raw_lines") or []
+        grids = base.get("_grids") or {}
 
         def run(chunks: list[dict]) -> list[dict]:
             return materialize_chunks(
@@ -466,6 +474,7 @@ class Studio:
                 min_chars,
                 raw_lines,
                 originals=base.get("chunks"),
+                grids=grids,
             )
 
         return run
@@ -506,6 +515,7 @@ class Studio:
         payload = dict(base)
         payload.pop("_raw_lines", None)
         payload.pop("_materials", None)
+        payload.pop("_grids", None)
         payload["chunks"] = chunks
         payload["stats"] = self._restat(chunks, base["stats"])
         payload["edited"] = False  # P3 覆盖层
