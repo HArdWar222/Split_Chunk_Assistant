@@ -88,7 +88,7 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 
 | 数据源 | 类 | 目录约定 | 元数据 |
 |---|---|---|---|
-| dirs（本地两目录） | `DirManifest` | `<data_root>/source/**.md` + `<data_root>/chunks/<名>.chunks.jsonl`（+ 同名 `.extras.jsonl` 可选） | 现算：块数、kinds、覆盖率；gate/warnings 显示「—」 |
+| dirs（本地两目录） | `DirManifest` | `<data_root>/source/**.md` + `<data_root>/chunks/<名>/<名>.chunks.jsonl`（+ 同名 `.extras.jsonl` 可选） | 现算：块数、kinds、覆盖率；gate/warnings 显示「—」 |
 
 - 子目录即分组（`data/<子目录>`），源与切片按「同名 + 同相对路径」配对；源缺失只记 warning，仍可打开看切片。
 - 扫描时机：服务启动、保存设置、以及 `POST /api/reload`（页面「刷新」按钮）时重扫；页面普通刷新不会重扫，避免大目录频繁 IO。
@@ -206,7 +206,7 @@ state = {
      studio.save_draft(key)：doc_payload(key).chunks（内存 ops 重放结果）
      → data/draft/<名>.<基线sha12>.chunks.jsonl（+ .extras.jsonl）
    POST /api/draft/commit {key}
-     drafts.commit_draft：校验文件名里的基线 sha12 == 当前 chunks/<名>/chunks.jsonl 的 sha12
+     drafts.commit_draft：校验文件名里的基线 sha12 == 当前 chunks/<名>/<名>.chunks.jsonl 的 sha12
      → 备份 data/backup/<名>.<时间戳>.jsonl（保留 3 份）
      → write_atomic 覆盖 chunks.jsonl（只写 15 个契约字段）→ 删草稿 → studio.reload()
    POST /api/draft/discard {key} → 删草稿；GET /api/export?key=… → 当前块 jsonl（15 字段）下载
@@ -270,7 +270,7 @@ def align_chunks(chunks, work_lines, extras, *, source_line_map=None) -> dict[st
 
 ## 9. 覆盖层与基线（现行：草稿 + 备份）
 
-- **基线**：`data/source/<名>.md` + `data/chunks/<名>/{chunks.jsonl, extras.jsonl, report.json}`（每个文档一个产物目录，`report.json` 可选）；
+- **基线**：`data/source/<名>.md` + `data/chunks/<名>/{<名>.chunks.jsonl, <名>.extras.jsonl, <名>.report.json}`（每个文档一个产物目录，`<名>.report.json` 可选）；
 - **草稿**：`data/draft/<名>.<基线sha12>.chunks.jsonl`（+ `.extras.jsonl`，可选）——文件名自带基线，不写任何状态文件（D21）；
 - **备份**：`data/backup/<名>.<时间戳>.jsonl`，提交前写一份旧版，保留最近 3 份；
 - 加载优先级：内存草稿（`_load_drafts` 恢复，基线不一致则标 stale）→ 基线 `chunks.jsonl`；

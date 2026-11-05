@@ -29,7 +29,7 @@ class DraftTestBase(unittest.TestCase):
         self.studio = Studio(cfg=self.cfg)
         self.client = App(self.studio)
         self.key = "data/测试包法规"
-        self.chunks_path = self.data_root / "chunks" / "测试包法规" / "chunks.jsonl"
+        self.chunks_path = self.data_root / "chunks" / "测试包法规" / "测试包法规.chunks.jsonl"
         self.draft_dir = self.data_root / "draft"
 
     def tearDown(self) -> None:

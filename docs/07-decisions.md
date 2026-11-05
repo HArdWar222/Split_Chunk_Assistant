@@ -137,13 +137,13 @@
 
 - **背景**：P2 的编辑只在内存，刷新即丢；需要「改完能存、能导出 15 字段」的持久化，但用户明确不要额外状态文件（m08919「我不想加meta，感觉该功能冗余」），也不要把草稿放进 `chunks/`（m08941）。
 - **决定**：
-  - **目录布局**：`data/source/<名>.md`；`data/chunks/<名>/{chunks.jsonl, extras.jsonl, report.json}`（每个文档一个文件夹）；`data/draft/`、`data/backup/` 为顶层独立目录（gitignore），不进 `chunks/`。
+  - **目录布局**：`data/source/<名>.md`；`data/chunks/<名>/{<名>.chunks.jsonl, <名>.extras.jsonl, <名>.report.json}`（每个文档一个文件夹）；文件名保留文档名，兼容读取早期统一命名的 `chunks.jsonl` / `extras.jsonl` / `report.json`；`data/draft/`、`data/backup/` 为顶层独立目录（gitignore），不进 `chunks/`。
   - **无 meta**：草稿文件名内嵌基线——`data/draft/<名>.<基线sha12>.chunks.jsonl`（+ `.extras.jsonl`）；不写任何状态/审计文件，不记 op 计数；「人工改过」仅按 mtime 推断（可选，不提示也行）。
   - **内存为唯一真源**：编辑仍在内存 + ops 重放；草稿只是定时快照（2 秒防抖、`Ctrl+S` 立即、切文件强制补存）；提交时从内存内容生成 `chunks.jsonl` 并原子替换，派生数据（span/对齐/table_grid）不落草稿。
-  - **提交事务**：校验「正式 chunks 的 sha12 == 草稿文件名里的基线」→ 备份旧版到 `data/backup/<名>.<时间戳>.jsonl`（保留最近 3 份）→ `write_atomic` 覆盖 `chunks/<名>/chunks.jsonl`（只写 15 个契约字段，`token_len`/`chunk_hash` 重算、id 按位置 `_renumber`）→ 删草稿；基线不一致则拒绝并提示「草稿已过期（基线变了），请放弃草稿后重新编辑」。
+  - **提交事务**：校验「正式 chunks 的 sha12 == 草稿文件名里的基线」→ 备份旧版到 `data/backup/<名>.<时间戳>.jsonl`（保留最近 3 份）→ `write_atomic` 覆盖 `chunks/<名>/<名>.chunks.jsonl`（只写 15 个契约字段，`token_len`/`chunk_hash` 重算、id 按位置 `_renumber`）→ 删草稿；基线不一致则拒绝并提示「草稿已过期（基线变了），请放弃草稿后重新编辑」。
   - **其他**：「放弃」删草稿；`GET /api/export` 下载当前块 jsonl（含未提交修改）；自动切块与草稿冲突时，源文件重切会使草稿基线失效（标 stale）；同一文件双标签后提交者因基线校验被拒。
 - **理由**：不引入 meta 也能满足「知道草稿基于哪版基线」；文件名即状态，故障恢复只看文件；原子替换保证崩溃时不出现半写文件。
-- **后果**：草稿目录里可能留有旧基线的孤儿草稿（保存新基线草稿时顺手清理）；备份只保留 3 份、不做长期归档；提交不写 `report.json`（引擎报告保持切块时的原样，提交不改它）。
+- **后果**：草稿目录里可能留有旧基线的孤儿草稿（保存新基线草稿时顺手清理）；备份只保留 3 份、不做长期归档；提交不写 `<名>.report.json`（引擎报告保持切块时的原样，提交不改它）。
 
 ## 待定问题
 

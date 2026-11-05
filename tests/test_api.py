@@ -98,7 +98,7 @@ class AppTest(unittest.TestCase):
         }
         doc_dir = data_root / "chunks" / name
         doc_dir.mkdir(parents=True, exist_ok=True)
-        (doc_dir / "chunks.jsonl").write_text(
+        (doc_dir / (name + ".chunks.jsonl")).write_text(
             json.dumps(chunk, ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
@@ -366,12 +366,12 @@ class AppTest(unittest.TestCase):
     def test_tables_with_grid(self):
         # 给 测试法-0001 补一个 table_grid（模拟表块），/api/tables 应返回结构化网格
         doc_dir = self.data_root / "chunks" / "测试法"
-        jsonl = doc_dir / "chunks.jsonl"
+        jsonl = doc_dir / "测试法.chunks.jsonl"
         rows = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
         rows[0]["chunk_kind"] = "table"
         jsonl.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
-        extras_path = doc_dir / "extras.jsonl"
+        extras_path = doc_dir / "测试法.extras.jsonl"
         extras = [json.loads(line) for line in extras_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         entry = next((item for item in extras if item["id"] == rows[0]["id"]), None)
         if entry is None:

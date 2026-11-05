@@ -47,7 +47,7 @@ class DirManifestTest(unittest.TestCase):
             "law_num": "1",
             "chunk_kind": "paragraph",
         }
-        (doc_dir / "chunks.jsonl").write_text(
+        (doc_dir / "子目录法.chunks.jsonl").write_text(
             __import__("json").dumps(chunk, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         manifest = DirManifest(self.data_root)
@@ -63,12 +63,32 @@ class DirManifestTest(unittest.TestCase):
         with self.assertRaises(ManifestError):
             DirManifest(empty)
 
+    def test_legacy_generic_filename_still_loads(self) -> None:
+        """早期统一命名 chunks.jsonl 仍能读；同目录同时存在时优先带文档名的文件。"""
+        import json
+
+        doc_dir = self.data_root / "chunks" / "旧命名法"
+        doc_dir.mkdir(parents=True)
+        row = {"id": "旧命名法-0001", "chunk": "旧命名正文", "law_name": "旧命名法", "chunk_kind": "paragraph"}
+        (doc_dir / "chunks.jsonl").write_text(
+            json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        manifest = DirManifest(self.data_root)
+        entry = manifest.get("data/旧命名法")
+        self.assertEqual(entry.n_chunks, 1)
+        self.assertEqual(Path(entry.jsonl).name, "chunks.jsonl")
+
+        named = doc_dir / "旧命名法.chunks.jsonl"
+        named.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        manifest = DirManifest(self.data_root)
+        self.assertEqual(Path(manifest.get("data/旧命名法").jsonl).name, "旧命名法.chunks.jsonl")
+
     def test_source_text_and_chunk_file(self) -> None:
         manifest = DirManifest(self.data_root)
         self.assertIn("测试包法规", manifest.source_text("data/测试包法规"))
         path = manifest.chunk_file("data/测试包法规")
         self.assertTrue(path.is_file())
-        self.assertEqual(path.name, "chunks.jsonl")
+        self.assertEqual(path.name, "测试包法规.chunks.jsonl")
         self.assertEqual(path.parent.name, "测试包法规")
 
     def test_nested_extras_format(self) -> None:

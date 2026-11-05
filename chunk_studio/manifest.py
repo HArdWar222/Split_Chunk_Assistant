@@ -26,6 +26,8 @@ EXTRAS_SUFFIX = ".extras.jsonl"
 REPORT_SUFFIX = ".report.json"
 
 #: 一个文档一个文件夹后的产物文件名（``<data_root>/chunks/<分组>/<名>/``）。
+#: 新约定保留文档名：``<名>.chunks.jsonl`` / ``<名>.extras.jsonl`` / ``<名>.report.json``；
+#: 下面三个旧名字（统一命名）仍兼容读取。
 CHUNKS_NAME = "chunks.jsonl"
 EXTRAS_NAME_LOCAL = "extras.jsonl"
 REPORT_NAME = "report.json"
@@ -234,9 +236,11 @@ class DirManifest:
     ``<data_root>/source/``
         源 .md 文件（可带子目录，子目录名会拼进分组）
     ``<data_root>/chunks/<分组>/<名>/``
-        ``chunks.jsonl``（必需，每行一个 chunk）
-        ``extras.jsonl``（可选，每行一个 chunk 的侧车，字段平铺或嵌套）
-        ``report.json``（可选，切块引擎的决策日志，含 gate/source_sha256）
+        ``<名>.chunks.jsonl``（必需，每行一个 chunk；兼容旧名 ``chunks.jsonl``）
+        ``<名>.extras.jsonl``（可选，每行一个 chunk 的侧车，字段平铺或嵌套；
+        兼容旧名 ``extras.jsonl``）
+        ``<名>.report.json``（可选，切块引擎的决策日志，含 gate/source_sha256；
+        兼容旧名 ``report.json``）
     ``<data_root>/draft/``
         未提交草稿（``<名>.<基线sha12>.chunks.jsonl``），不属于正式产物
     ``<data_root>/backup/``
@@ -272,15 +276,52 @@ class DirManifest:
         total_chars = 0
         total_source = 0
         merged_kinds: dict[str, int] = {}
-        for path in sorted(self.chunks_dir.rglob(CHUNKS_NAME)):
+        # 先收集「每个文档一个 chunks 文件」：目录内文件名优先 <名>.chunks.jsonl，
+        # 兼容旧的统一名 chunks.jsonl；data/chunks/ 下直接放 <名>.chunks.jsonl 也兼容。
+        picked: "OrderedDict[str, tuple[Path, str, Path]]" = OrderedDict()
+        candidates = sorted(
+            set(self.chunks_dir.rglob("*" + CHUNKS_SUFFIX))
+            | set(self.chunks_dir.rglob(CHUNKS_NAME))
+        )
+        for path in candidates:
             if not path.is_file():
                 continue
             doc_dir = path.parent
-            name = doc_dir.name
-            rel = doc_dir.parent.relative_to(self.chunks_dir)
-            group = "data" if rel.as_posix() == "." else "data/" + rel.as_posix()
+            stem = path.name[: -len(CHUNKS_SUFFIX)] if path.name.endswith(CHUNKS_SUFFIX) else path.name[: -len(".jsonl")]
+            if doc_dir == self.chunks_dir:
+                # 旧式：直接把 <名>.chunks.jsonl 放在 chunks/ 下
+                if stem == "chunks":
+                    continue
+                name = stem
+                group_rel = Path()
+            else:
+                # 新式：一个文档一个文件夹，文件夹名=文档名
+                name = doc_dir.name
+                group_rel = doc_dir.parent.relative_to(self.chunks_dir)
+                if stem not in (name, "chunks"):
+                    continue
+            group = (
+                "data"
+                if group_rel.as_posix() in ("", ".")
+                else "data/" + group_rel.as_posix()
+            )
             key = f"{group}/{name}"
-            source = self.source_dir / rel / (name + ".md")
+            previous = picked.get(key)
+            # 同名时优先保留带文档名的文件，避免与旧 chunks.jsonl 重复计数
+            if previous is None or path.name == name + CHUNKS_SUFFIX:
+                picked[key] = (path, name, group_rel)
+
+        for key, (path, name, group_rel) in picked.items():
+            group = (
+                "data"
+                if group_rel.as_posix() in ("", ".")
+                else "data/" + group_rel.as_posix()
+            )
+            doc_dir = path.parent
+            if group_rel.as_posix() in ("", "."):
+                source = self.source_dir / (name + ".md")
+            else:
+                source = self.source_dir / group_rel / (name + ".md")
             warnings: list[str] = []
             if not source.is_file():
                 found = sorted(self.source_dir.rglob(name + ".md"))
@@ -297,10 +338,10 @@ class DirManifest:
                 source_chars = len(source.read_text(encoding="utf-8"))
                 total_source += source_chars
             total_chars += chars
-            extras_path = doc_dir / EXTRAS_NAME_LOCAL
+            extras_path = _sidecar(doc_dir, name, EXTRAS_SUFFIX, EXTRAS_NAME_LOCAL)
             extras_count = _count_lines(extras_path)
             coverage = round(chars / source_chars, 4) if source_chars else 0.0
-            report = _scan_report(doc_dir / REPORT_NAME)
+            report = _scan_report(_sidecar(doc_dir, name, REPORT_SUFFIX, REPORT_NAME))
             gate_ok = report.get("gate_ok", True) if report else True
             for failure in report.get("failures", []):
                 warnings.append(f"gate：{failure}")
@@ -364,7 +405,8 @@ class DirManifest:
 
     def extras_for(self, key: str) -> dict[str, dict]:
         entry = self.get(key)
-        path = Path(entry.jsonl).parent / EXTRAS_NAME_LOCAL
+        doc_dir = Path(entry.jsonl).parent
+        path = _sidecar(doc_dir, entry.law_name, EXTRAS_SUFFIX, EXTRAS_NAME_LOCAL)
         if path not in self._extras_cache:
             extras: dict[str, dict] = {}
             if path.is_file():
@@ -421,6 +463,14 @@ class DirManifest:
             },
             "groups": groups,
         }
+
+
+def _sidecar(doc_dir: Path, name: str, suffix: str, legacy: str) -> Path:
+    """侧车/报告文件定位：优先保留文档名的新命名，兼容旧的统一命名。"""
+    named = doc_dir / (name + suffix)
+    if named.is_file():
+        return named
+    return doc_dir / legacy
 
 
 def _scan_chunks(path: Path) -> tuple[int, dict[str, int], int]:

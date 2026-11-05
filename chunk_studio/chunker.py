@@ -28,7 +28,6 @@ from pathlib import Path
 
 from .config import REPO_ROOT, Config
 from .manifest import CHUNKS_NAME, EXTRAS_NAME_LOCAL, REPORT_NAME
-
 ENGINE_PACKAGE = "chunking_v2"
 CLI_MODULE = "chunking_v2.cli"
 VENDOR_ROOT = REPO_ROOT / "vendor" / "splitchunk"
@@ -148,13 +147,13 @@ def scan_pending(cfg: Config, now: float | None = None) -> list[PendingFile]:
         rel_dir = "" if rel.as_posix() == "." else rel.as_posix()
         stem = source.name[: -len(".md")]
         doc_dir = chunks_dir / rel / stem
-        chunk_path = doc_dir / CHUNKS_NAME
+        chunk_path = _existing_chunks(doc_dir, stem)
         subject = "data/" + stem if not rel_dir else f"data/{rel_dir}/{stem}"
-        if not chunk_path.is_file():
+        if chunk_path is None:
             out.append(PendingFile(subject, source, rel_dir, "new"))
             continue
-        report = doc_dir / REPORT_NAME
-        recorded = _report_sha256(report)
+        report = _existing_report(doc_dir, stem)
+        recorded = _report_sha256(report) if report else ""
         if recorded:
             current = _sha256_text(source)
             if current and current != recorded:
@@ -287,20 +286,43 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
 
 
 def _publish_tmp(tmp_dir: Path, doc_dir: Path, stem: str) -> str:
-    """把临时目录里的三件套搬进文档目录；返回错误消息（空串=成功）。"""
+    """把临时目录里的三件套搬进文档目录（保留文档名）。
+
+    新约定：``<名>.chunks.jsonl`` / ``<名>.extras.jsonl`` / ``<名>.report.json``；
+    同时删掉早期统一命名的 ``chunks.jsonl`` 等，避免同一目录出现两份。
+    返回错误消息（空串=成功）。
+    """
     try:
         doc_dir.mkdir(parents=True, exist_ok=True)
-        for src_name, dst_name in (
-            (stem + CHUNKS_SUFFIX, CHUNKS_NAME),
-            (stem + EXTRAS_SUFFIX, EXTRAS_NAME_LOCAL),
-            (stem + REPORT_SUFFIX, REPORT_NAME),
-        ):
-            src = tmp_dir / src_name
+        for suffix in (CHUNKS_SUFFIX, EXTRAS_SUFFIX, REPORT_SUFFIX):
+            src = tmp_dir / (stem + suffix)
             if src.is_file():
-                os.replace(src, doc_dir / dst_name)
+                os.replace(src, doc_dir / (stem + suffix))
+        for legacy in (CHUNKS_NAME, EXTRAS_NAME_LOCAL, REPORT_NAME):
+            path = doc_dir / legacy
+            if path.is_file():
+                path.unlink()
     except OSError as exc:
         return f"切块产物落位失败：{exc}"
     return ""
+
+
+def _existing_chunks(doc_dir: Path, stem: str) -> Path | None:
+    """文档目录里已存在的切块文件（新命名优先，兼容旧统一命名）。"""
+    for name in (stem + CHUNKS_SUFFIX, CHUNKS_NAME):
+        path = doc_dir / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _existing_report(doc_dir: Path, stem: str) -> Path | None:
+    for name in (stem + REPORT_SUFFIX, REPORT_NAME):
+        path = doc_dir / name
+        if path.is_file():
+            return path
+    return None
+
 
 
 def _cleanup_tmp(tmp_dir: Path) -> None:

@@ -29,7 +29,7 @@ def _make_data_root(base: Path) -> Path:
     _write(root / "source" / "乙法.md", "# 乙法\n\n第一条 丙。\n")
     # 甲法已有切片（不算待切）；乙法只有源文件（待切）
     _write(
-        root / "chunks" / "甲法" / "chunks.jsonl",
+        root / "chunks" / "甲法" / "甲法.chunks.jsonl",
         json.dumps({"id": "甲法-0001", "chunk": "第一条 甲。", "law_name": "甲法"}, ensure_ascii=False) + "\n",
     )
     return root
@@ -76,7 +76,7 @@ class ScanPendingTest(unittest.TestCase):
             root = _make_data_root(base)
             cfg = Config(data_root=str(root))
             # 甲法已有 report，但 source_sha256 对不上 → outdated
-            (root / "chunks" / "甲法" / "report.json").write_text(
+            (root / "chunks" / "甲法" / "甲法.report.json").write_text(
                 json.dumps({"engine_version": "0.1.4", "source_sha256": "deadbeef"}),
                 encoding="utf-8",
             )
@@ -102,8 +102,8 @@ class RunEngineFileTest(unittest.TestCase):
             self.assertTrue(result["ok"], result.get("message"))
             self.assertGreaterEqual(result["n_chunks"], 1)
             doc_dir = root / "chunks" / "乙法"
-            self.assertTrue((doc_dir / "chunks.jsonl").is_file())
-            self.assertTrue((doc_dir / "report.json").is_file())
+            self.assertTrue((doc_dir / "乙法.chunks.jsonl").is_file())
+            self.assertTrue((doc_dir / "乙法.report.json").is_file())
 
 
 class _FakeStudio:
@@ -130,9 +130,9 @@ class WatchServiceTest(unittest.TestCase):
                 # 模拟引擎产物：写 chunks + report，让 reload 后不再 pending
                 out = Path(cfg.data_root) / "chunks"
                 name = Path(item.source).stem
-                _write(out / name / "chunks.jsonl", "")
+                _write(out / name / (name + ".chunks.jsonl"), "")
                 _write(
-                    out / name / "report.json",
+                    out / name / (name + ".report.json"),
                     json.dumps({"engine_version": "0.1.4", "source_sha256": "x"}),
                 )
                 return {
@@ -164,9 +164,9 @@ class WatchServiceTest(unittest.TestCase):
         with workspace_tmp() as base:
             root = _make_data_root(base)
             # 把「乙法」也补上切片与 report（sha 必须与源文件一致），使没有任何待切文件
-            _write(root / "chunks" / "乙法" / "chunks.jsonl", "")
+            _write(root / "chunks" / "乙法" / "乙法.chunks.jsonl", "")
             sha = hashlib.sha256((root / "source" / "乙法.md").read_bytes()).hexdigest()
-            (root / "chunks" / "乙法" / "report.json").write_text(
+            (root / "chunks" / "乙法" / "乙法.report.json").write_text(
                 json.dumps({"engine_version": "0.1.4", "source_sha256": sha}),
                 encoding="utf-8",
             )

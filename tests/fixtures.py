@@ -224,7 +224,7 @@ def make_data_dir(base: Path, extras_style: str = "flat") -> Path:
     ]
     doc_dir = chunks_dir / name
     doc_dir.mkdir(parents=True, exist_ok=True)
-    _write_jsonl(doc_dir / "chunks.jsonl", chunks)
+    _write_jsonl(doc_dir / (name + ".chunks.jsonl"), chunks)
     flat_extras = [
         {"id": name + "-0001", "table_label": "", "region": "body", "clause": "第一条"},
         {"id": name + "-0002", "table_label": "", "region": "body", "clause": "第二条"},
@@ -239,7 +239,7 @@ def make_data_dir(base: Path, extras_style: str = "flat") -> Path:
         ]
     else:
         extras = flat_extras
-    _write_jsonl(doc_dir / "extras.jsonl", extras)
+    _write_jsonl(doc_dir / (name + ".extras.jsonl"), extras)
     return data_root
 
 
@@ -291,17 +291,17 @@ def make_two_file_data_dir(base: Path, root_name: str = "store") -> Path:
     doc2 = chunks_dir / "GB 0001-2020 测试标准"
     doc1.mkdir(parents=True, exist_ok=True)
     doc2.mkdir(parents=True, exist_ok=True)
-    _write_jsonl(doc1 / "chunks.jsonl", chunks1)
-    _write_jsonl(doc2 / "chunks.jsonl", chunks2)
+    _write_jsonl(doc1 / "测试法.chunks.jsonl", chunks1)
+    _write_jsonl(doc2 / "GB 0001-2020 测试标准.chunks.jsonl", chunks2)
     _write_jsonl(
-        doc1 / "extras.jsonl",
+        doc1 / "测试法.extras.jsonl",
         [
             {"id": "测试法-0001", "region": "body", "profile": "statute_cn_law"},
             {"id": "测试法-0002", "region": "body"},
         ],
     )
     _write_jsonl(
-        doc2 / "extras.jsonl",
+        doc2 / "GB 0001-2020 测试标准.extras.jsonl",
         [{"id": "GB 0001-2020 测试标准-0001", "region": "body", "probe": {"family": "standard"}}],
     )
     return data_root
