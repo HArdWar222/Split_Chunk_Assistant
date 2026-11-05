@@ -859,11 +859,19 @@
     }
 
     // 切片范围条：每块的行区间分配到 4 条泳道（贪心：互不重叠的块共用一条）
+    // 分片 part 特殊处理：外层「父块整段」条（浅色）+ 内层「part 真实行段」条（深色）。
     var MAX_LANES = 4;
+    var PART_LANE = 5;
+    var PARENT_LANE = 6;
     var laneEnds = [];
     var laneOfChunk = new Array(doc.chunks.length);
+    var partSpanOf = function (chunk) {
+      if ((chunk.part_total || 1) > 1 && chunk.part_span) return chunk.part_span;
+      return chunk.span;
+    };
     doc.chunks.forEach(function (chunk, idx) {
       if (!chunk.span) return;
+      if ((chunk.part_total || 1) > 1) { laneOfChunk[idx] = PART_LANE; return; }
       var start = chunk.span[0];
       var end = chunk.span[1];
       var lane = -1;
@@ -879,17 +887,50 @@
     });
     var laneBuckets = new Array(total + 1);
     for (var b = 1; b <= total; b++) laneBuckets[b] = {};
+    // 分片组 → 父块整段（组内各 part span 的并集）；用于外层浅条与兜底显示。
+    var groupSpans = {};
+    doc.chunks.forEach(function (chunk) {
+      if (!chunk.span || (chunk.part_total || 1) <= 1) return;
+      var base = String(chunk.id || "").replace(/-p\d+$/, "");
+      var g = groupSpans[base];
+      if (!g) groupSpans[base] = g = [chunk.span[0], chunk.span[1]];
+      else {
+        g[0] = Math.min(g[0], chunk.span[0]);
+        g[1] = Math.max(g[1], chunk.span[1]);
+      }
+    });
+    var seenParent = {};
     doc.chunks.forEach(function (chunk, idx) {
       if (!chunk.span) return;
       var lane = laneOfChunk[idx];
-      for (var k = chunk.span[0]; k <= chunk.span[1]; k++) {
+      var isPart = (chunk.part_total || 1) > 1;
+      var span = isPart ? partSpanOf(chunk) : chunk.span;
+      if (!span) return;
+      for (var k = span[0]; k <= span[1]; k++) {
         var bucket = laneBuckets[k];
         if (!bucket) continue;
         var cell = bucket[lane];
-        if (!cell) cell = bucket[lane] = { lane: lane, chunks: [], start: false, end: false };
+        if (!cell) cell = bucket[lane] = { lane: lane, chunks: [], start: false, end: false, part: isPart };
         cell.chunks.push(idx);
-        if (chunk.span[0] === k) cell.start = true;
-        if (chunk.span[1] === k) cell.end = true;
+        if (span[0] === k) cell.start = true;
+        if (span[1] === k) cell.end = true;
+      }
+      if (isPart) {
+        // 外层浅条：同一分片组只画一根「父块整段」条（按 base id 去重）
+        var base = String(chunk.id || "").replace(/-p\d+$/, "");
+        var pspan = groupSpans[base] || chunk.span;
+        if (!seenParent[base] && pspan) {
+          seenParent[base] = true;
+          for (var pk = pspan[0]; pk <= pspan[1]; pk++) {
+            var pb = laneBuckets[pk];
+            if (!pb) continue;
+            var pc = pb[PARENT_LANE];
+            if (!pc) pc = pb[PARENT_LANE] = { lane: PARENT_LANE, chunks: [], start: false, end: false, parent: true };
+            pc.chunks.push(idx);
+            if (pspan[0] === pk) pc.start = true;
+            if (pspan[1] === pk) pc.end = true;
+          }
+        }
       }
     });
 
@@ -904,17 +945,30 @@
 
     function barsForRange(start, end) {
       var bars = {};
+      var parents = {};
       doc.chunks.forEach(function (chunk, idx) {
         if (!chunk.span) return;
-        if (chunk.span[1] < start || chunk.span[0] > end) return;
+        var isPart = (chunk.part_total || 1) > 1;
+        var span = isPart ? partSpanOf(chunk) : chunk.span;
+        if (!span) return;
+        if (span[1] < start || span[0] > end) return;
         var lane = laneOfChunk[idx];
         var bar = bars[lane];
-        if (!bar) bar = bars[lane] = { lane: lane, chunks: [], start: false, end: false };
+        if (!bar) bar = bars[lane] = { lane: lane, chunks: [], start: false, end: false, part: isPart };
         bar.chunks.push(idx);
-        if (chunk.span[0] >= start && chunk.span[0] <= end) bar.start = true;
-        if (chunk.span[1] >= start && chunk.span[1] <= end) bar.end = true;
+        if (span[0] >= start && span[0] <= end) bar.start = true;
+        if (span[1] >= start && span[1] <= end) bar.end = true;
         // 覆盖整块 → 是块内部的一段，画成连续竖条（不留断口）
-        if (chunk.span[0] <= start && chunk.span[1] >= end) { bar.start = false; bar.end = false; }
+        if (span[0] <= start && span[1] >= end) { bar.start = false; bar.end = false; }
+        if (isPart) {
+          var base = String(chunk.id || "").replace(/-p\d+$/, "");
+          if (!parents[base]) {
+            parents[base] = true;
+            var pbar = bars[PARENT_LANE];
+            if (!pbar) pbar = bars[PARENT_LANE] = { lane: PARENT_LANE, chunks: [], start: false, end: false, parent: true };
+            pbar.chunks.push(idx);
+          }
+        }
       });
       return bars;
     }
@@ -1049,13 +1103,29 @@
         var cell = bars[key];
         var bar = document.createElement("span");
         bar.className = "lane lane-" + cell.lane;
+        if (cell.part) bar.className += " lane-part";
+        if (cell.parent) bar.className += " lane-parent";
         if (cell.start) bar.className += " start";
         if (cell.end) bar.className += " end";
         if (cell.start && cell.end) bar.className += " only";
         bar.dataset.chunk = String(cell.chunks[0]);
-        if (cell.chunks.length === 1) {
+        if (cell.parent) {
+          var parentChunk = doc.chunks[cell.chunks[0]];
+          var parentBase = String(parentChunk.id || "").replace(/-p\d+$/, "");
+          var pspan2 = groupSpans[parentBase] || parentChunk.span;
+          bar.title = "父块整段覆盖：第 " + pspan2[0] + "–" + pspan2[1] +
+            " 行（组内共 " + parentChunk.part_total + " 个分片）";
+        } else if (cell.chunks.length === 1) {
           var only = doc.chunks[cell.chunks[0]];
-          bar.title = "切片 #" + (cell.chunks[0] + 1) + " · " + only.id + " · 第 " + only.span[0] + "–" + only.span[1] + " 行";
+          if ((only.part_total || 1) > 1) {
+            var ps = partSpanOf(only) || only.span;
+            var onlyBase = String(only.id || "").replace(/-p\d+$/, "");
+            var onlyParent = groupSpans[onlyBase] || only.span;
+            bar.title = "分片 part " + only.part_index + "/" + only.part_total + " · " + only.id +
+              " · 本片第 " + ps[0] + "–" + ps[1] + " 行（父块第 " + onlyParent[0] + "–" + onlyParent[1] + " 行）";
+          } else {
+            bar.title = "切片 #" + (cell.chunks[0] + 1) + " · " + only.id + " · 第 " + only.span[0] + "–" + only.span[1] + " 行";
+          }
         } else {
           var ids = cell.chunks.slice(0, 4).map(function (idx) { return doc.chunks[idx].id; }).join(", ");
           bar.title = "第 " + lineNo + " 行被 " + cell.chunks.length + " 个切片覆盖：" + ids +
@@ -1191,7 +1261,11 @@
           escapeHtml(cover[0]) + "–" + escapeHtml(cover[cover.length - 1]) + "（" + cover.length + " 条）</span>");
       }
       if (chunk.part_total > 1) {
-        badges.push("<span class='badge badge-part'>part " + chunk.part_index + "/" + chunk.part_total + "</span>");
+        var partSpan = chunk.part_span || chunk.span;
+        var partSpanText = partSpan ? " · 第 " + partSpan[0] + "–" + partSpan[1] + " 行" : "";
+        badges.push("<span class='badge badge-part' title='分片 " + escapeHtml(chunk.part_index + "/" + chunk.part_total) +
+          (partSpan ? "，本片覆盖原文第 " + partSpan[0] + "–" + partSpan[1] + " 行" : "") +
+          "'>part " + chunk.part_index + "/" + chunk.part_total + escapeHtml(partSpanText) + "</span>");
       }
       badges.push("<span class='badge badge-align " + escapeHtml(chunk.align) + "'>" +
         escapeHtml(ALIGN_LABEL[chunk.align] || chunk.align) + "</span>");

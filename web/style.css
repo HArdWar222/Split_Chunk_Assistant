@@ -295,6 +295,13 @@ body {
 .line .lane-2 { left: 10px; background: #f59e0b; }
 .line .lane-3 { left: 14px; background: #a78bfa; }
 
+/* P3 分片泳道：外层浅条 = 父块整段；内层深条 = part 真实行段 */
+.line .lane.lane-parent { left: 1px; width: 5px; background: #c7ddff; opacity: .95; border-radius: 3px; }
+.line .lane.lane-part { left: 7px; width: 3px; background: #1d4ed8; opacity: 1; }
+.line .lane.lane-part.start { top: 4px; }
+.line .lane.lane-part.end { bottom: 4px; }
+
+
 /* 表格块：一张表被切成很多块、span 又都是同一源码行时，合并成一根聚合条 */
 .line .lane-agg {
   left: 4px;
