@@ -60,6 +60,18 @@ class FrozenModeTest(unittest.TestCase):
         self.assertEqual(paths.web_dir(), self.res / "web")
         self.assertEqual(paths.vendor_root(), self.res / "vendor" / "splitchunk")
 
+    def test_app_root_falls_back_when_exe_dir_not_writable(self):
+        """安装到 Program Files（exe 目录不可写）时回退到 %LOCALAPPDATA%。"""
+        local = self.app / "LocalAppData"
+        local.mkdir()
+        with mock.patch.object(paths, "_writable", return_value=False), mock.patch.dict(
+            "os.environ", {"LOCALAPPDATA": str(local)}
+        ):
+            root = paths.app_root()
+            self.assertEqual(root, local / paths.APP_DIR_NAME)
+            self.assertTrue(root.is_dir())
+            self.assertEqual(paths.default_config_path(), root / "config.json")
+
     def test_ensure_data_layout_creates_subdirs(self):
         root = paths.ensure_data_layout(self.app / "data")
         for name in paths.DATA_SUBDIRS:

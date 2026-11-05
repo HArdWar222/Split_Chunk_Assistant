@@ -9,8 +9,26 @@ from __future__ import annotations
 
 import sys
 
+from . import paths
+
 #: 内部隐藏开关，不要写进用户文档；由 chunker.engine_command() 在冻结态使用。
 ENGINE_FLAG = "--run-chunk-cli"
+
+
+def _prepare_engine_path() -> None:
+    """冻结态把打包进来的 vendor 引擎目录加入 ``sys.path``。
+
+    引擎以「数据目录 + 源码」形式随 ``_internal/vendor/splitchunk`` 分发，
+    这样升级引擎只需替换该目录、无需重新打包；``chunking_v2`` 从磁盘导入。
+    """
+    if not paths.is_frozen():
+        return
+    root = paths.vendor_root()
+    if not root.is_dir():
+        return
+    entry = str(root)
+    if entry not in sys.path:
+        sys.path.insert(0, entry)
 
 
 def run_chunk_cli(argv: list[str]) -> int:
@@ -26,6 +44,7 @@ def run_chunk_cli(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    _prepare_engine_path()
     if args and args[0] == ENGINE_FLAG:
         return run_chunk_cli(args[1:])
     from .server import main as server_main

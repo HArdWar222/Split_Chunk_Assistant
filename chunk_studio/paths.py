@@ -12,11 +12,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 DEFAULT_CONFIG_NAME = "config.json"
 DATA_DIR_NAME = "data"
+#: 安装到 Program Files 时回退到 %LOCALAPPDATA% 下的目录名。
+APP_DIR_NAME = "SplitChunkAssistant"
 #: ``data/`` 下需要预先建好的四个子目录。
 DATA_SUBDIRS = ("source", "chunks", "draft", "backup")
 
@@ -34,11 +37,34 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _writable(directory: Path) -> bool:
+    """目录是否可写（不存在则尝试创建后探测）。"""
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".write-probe"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def app_root() -> Path:
-    """可写应用根：打包态是 exe 所在目录，开发态是仓库根。"""
-    if is_frozen():
-        return Path(sys.executable).resolve().parent
-    return resource_root()
+    """可写应用根：开发态是仓库根；打包态优先 exe 所在目录。
+
+    安装到 ``Program Files`` 时 exe 目录对普通用户不可写（UAC 虚拟化只对部分
+    旧程序生效），此时回退到 ``%LOCALAPPDATA%/SplitChunkAssistant``，保证
+    ``config.json`` 与 ``data/`` 能落盘。
+    """
+    if not is_frozen():
+        return resource_root()
+    exe_dir = Path(sys.executable).resolve().parent
+    if _writable(exe_dir):
+        return exe_dir
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    fallback = Path(local) / APP_DIR_NAME
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def default_config_path() -> Path:
@@ -55,7 +81,7 @@ def web_dir() -> Path:
 
 
 def vendor_root() -> Path:
-    """vnedor 的切块引擎根（``chunking_v2/`` 所在目录）。"""
+    """vendor 的切块引擎根（``chunking_v2/`` 所在目录）。"""
     return resource_root() / "vendor" / "splitchunk"
 
 

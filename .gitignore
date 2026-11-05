@@ -44,3 +44,7 @@ _msg*.txt
 _tmp_chunk/
 
 data/
+
+# 打包产物（PyInstaller / Inno Setup）
+build/
+dist/
