@@ -2294,6 +2294,8 @@
     }
     // 表格行不是源码里的连续文字，没有「光标处拆分」可言
     var plan = (target && !rowTr) ? splitPlanAt(target, pos || { line: line, offset: 0 }) : null;
+    // 选区从没有切片覆盖的行开始、一直选进某个切片内部 → 默认动作是「并入该切片」
+    var gapPlan = gapMergePlan(picked);
 
     el.ctxMenu.innerHTML = "";
     var count = 0;
@@ -2379,6 +2381,21 @@
       }
       placeCtxMenu(ev);
       return;
+    }
+
+    if (gapPlan) {
+      el.ctxMenu.appendChild(ctxItem(
+        "⤢ 把未切片选区并入 #" + chunkDisplayNo(gapPlan.target) + " 切片",
+        "第 " + gapPlan.gapFrom + "–" + gapPlan.gapTo + " 行 · 并入 #" + chunkDisplayNo(gapPlan.target) + "（一次撤销）",
+        (function (gp) {
+          return function () {
+            state.extendPlan = gp;
+            el.addLawNum.value = String(gp.target.law_num || "");
+            mergeGapIntoChunk(gp.body);
+          };
+        })(gapPlan)
+      ));
+      count++;
     }
 
     if (plan) {
@@ -3368,6 +3385,68 @@
     return { kind: "text", target: target2, ids: ids2, from: picked.start, to: Math.max(picked.end, covered) };
   }
 
+  // 选区从「没有切片覆盖的位置」开始、一直选进某个切片内部
+  // → 默认把这段未切片原文并入那个切片（不新增一块，一次撤销）。
+  function gapMergePlan(picked) {
+    if (!state.doc || !picked) return null;
+    if (typeof picked.start !== "number" || typeof picked.end !== "number") return null;
+    if (!(picked.end > picked.start)) return null;
+    if (!picked.text || !picked.text.trim()) return null;
+    var chunks = state.doc.chunks || [];
+    if (chunkAtLine(picked.start)) return null;
+    var target = null;
+    chunks.forEach(function (c) {
+      if (!c.span) return;
+      if (c.span[0] > picked.start && c.span[0] <= picked.end) {
+        if (!target || c.span[0] < target.span[0]) target = c;
+      }
+    });
+    if (!target || !target.span) return null;
+    // 未切片片段必须紧邻目标块之前，中间不能夹别的切片（否则属于跨块选区，行为交给合并/新增）
+    for (var i = 0; i < chunks.length; i++) {
+      var c2 = chunks[i];
+      if (c2 !== target && c2.span && c2.span[1] >= picked.start && c2.span[0] < target.span[0]) return null;
+    }
+    var lines = state.doc.lines || [];
+    var gapLines = [];
+    for (var n = picked.start; n < target.span[0]; n++) {
+      gapLines.push(lines[n - 1] ? (lines[n - 1].text || "") : "");
+    }
+    var gapBody = gapLines.join("\n");
+    if (!gapBody.trim()) return null;
+    var targetBody = String(target.chunk || "");
+    return {
+      kind: "gap",
+      target: target,
+      from: picked.start,
+      to: target.span[1],
+      gapFrom: picked.start,
+      gapTo: target.span[0] - 1,
+      body: gapBody + (targetBody ? "\n" + targetBody : "")
+    };
+  }
+
+  function mergeGapIntoChunk(text) {
+    var plan = state.extendPlan;
+    if (!plan || !plan.target) return;
+    var targetId = plan.target.id;
+    var op = { op: "extend", id: targetId, ids: [targetId], chunk: String(text || ""), span: [plan.from, plan.to] };
+    var lawNum = el.addLawNum.value.trim();
+    if (lawNum) op.law_num = lawNum;
+    postJSON("/api/op", { key: state.docKey, op: op }).then(function (doc) {
+      if (el.addDialog && el.addDialog.open) el.addDialog.close();
+      state.addMode = "add";
+      state.extendPlan = null;
+      applyDocPayload(doc);
+      var chunk = findChunk(targetId);
+      if (chunk) selectChunk(chunk, { scrollSource: true, scrollCard: true });
+      showToast("已把第 " + plan.gapFrom + "–" + plan.gapTo + " 行并入 #" +
+        chunkDisplayNo(chunk || plan.target) + "（Ctrl+Z 可撤销）", "ok");
+    }).catch(function (err) {
+      opFailed(err, el.addErrors);
+    });
+  }
+
   function hasChunkStartingWithin(chunks, target, end) {
     for (var i = 0; i < chunks.length; i++) {
       var c = chunks[i];
@@ -3471,6 +3550,27 @@
       el.addDialog.showModal();
       return;
     }
+    // 选区从没有切片的位置开始、选进某切片内部 → 默认「并入该切片」
+    var gapPlan2 = gapMergePlan(picked);
+    if (gapPlan2) {
+      state.addMode = "gapmerge";
+      state.extendPlan = gapPlan2;
+      state.addBeforeId = null;
+      state.addAfterId = null;
+      state.addSpan = null;
+      el.addTitle.textContent = "⤢ 并入切片";
+      el.addDesc.textContent = "选区从没有切片的位置开始、一直选进了 #" + chunkDisplayNo(gapPlan2.target) +
+        " 切片：提交后把这段未切片原文并入该切片，不新增一块；Ctrl+Z 一次撤销。";
+      el.btnAddOk.textContent = "并入";
+      el.addText.value = gapPlan2.body;
+      el.addLawNum.value = String(gapPlan2.target.law_num || "");
+      fillKind(el.addKind, gapPlan2.target.chunk_kind || "paragraph");
+      el.addHint.hidden = false;
+      el.addHint.textContent = "将把第 " + gapPlan2.gapFrom + "–" + gapPlan2.gapTo + " 行并入 #" +
+        chunkDisplayNo(gapPlan2.target) + "（行区间变为 " + gapPlan2.from + "–" + gapPlan2.to + " 行）。";
+      el.addDialog.showModal();
+      return;
+    }
     state.addBeforeId = null;
     if (picked && picked.text.trim()) {
       state.addSpan = [picked.start, picked.end];
@@ -3550,6 +3650,10 @@
     if (!text.trim()) { opFailed({ message: "正文不能为空" }, el.addErrors); return; }
     if (state.addMode === "extend" && state.extendPlan) {
       submitExtend(text);
+      return;
+    }
+    if (state.addMode === "gapmerge" && state.extendPlan) {
+      mergeGapIntoChunk(text);
       return;
     }
     var op = {
