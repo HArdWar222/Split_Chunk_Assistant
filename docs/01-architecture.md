@@ -62,6 +62,7 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 │   ├── fac_bridge.py        (~150 行) 数据源适配（Manifest / DirManifest）
 │   ├── autopart.py          (~260 行) 自动分 part（文本均分 / 表格按行拆块）
 │   ├── chunker.py           (~410 行) SPLITCHUNK 引擎定位 / 待切扫描 / 子进程 CLI / WatchService（轮询 + 单 worker）
+│   ├── drafts.py            (~200 行) 草稿读写 / 基线校验 / 备份 / 提交 / 导出
 │   └── web\
 │       ├── index.html
 │       ├── style.css
@@ -199,6 +200,17 @@ state = {
    rechunk.preview(key, params) → GroupOverride 包 SourceGroup
    → fac_bridge.chunk_file_full(path, group=override)（不落盘）
    → 新旧块对比 {added, removed, changed}，前端弹确认
+
+⑥ P3 草稿 / 提交（现行实现，取代 ④ 的 overlay 保存）
+   POST /api/draft/save {key}
+     studio.save_draft(key)：doc_payload(key).chunks（内存 ops 重放结果）
+     → data/draft/<名>.<基线sha12>.chunks.jsonl（+ .extras.jsonl）
+   POST /api/draft/commit {key}
+     drafts.commit_draft：校验文件名里的基线 sha12 == 当前 chunks/<名>/chunks.jsonl 的 sha12
+     → 备份 data/backup/<名>.<时间戳>.jsonl（保留 3 份）
+     → write_atomic 覆盖 chunks.jsonl（只写 15 个契约字段）→ 删草稿 → studio.reload()
+   POST /api/draft/discard {key} → 删草稿；GET /api/export?key=… → 当前块 jsonl（15 字段）下载
+   草稿恢复：_init_bridge 完成后扫 data/draft，按文件名基线判断是否 stale，读入内存供 doc_payload 使用
 ```
 
 ---
@@ -256,14 +268,15 @@ def align_chunks(chunks, work_lines, extras, *, source_line_map=None) -> dict[st
 
 ---
 
-## 9. 覆盖层与基线
+## 9. 覆盖层与基线（现行：草稿 + 备份）
 
-- **基线**：本地 `data/source/*.md` + `data/chunks/*.chunks.jsonl`（+ 可选 `.extras.jsonl`）；
-- **覆盖层**：`edits/<group>__<stem>.jsonl`（15 字段快照）+ `.extras.jsonl` + `.meta.json`
-  （`source_sha256 / saved_at / note / 每块 span 缓存 / manual 标记 / 改动统计`）；
-- 加载优先级：覆盖层 → 基线 → 现场跑 `chunk_file_full` 生成；
-- **基线一致性**：`.meta.json` 记录源文件 sha256；源 md 变化时返回 `stale: true`，UI 顶部黄条提示「源已变更，建议重切或重置」；
-- **不做增量 diff 文件**：每次保存写整份快照，简单、可审计、可回滚。
+- **基线**：`data/source/<名>.md` + `data/chunks/<名>/{chunks.jsonl, extras.jsonl, report.json}`（每个文档一个产物目录，`report.json` 可选）；
+- **草稿**：`data/draft/<名>.<基线sha12>.chunks.jsonl`（+ `.extras.jsonl`，可选）——文件名自带基线，不写任何状态文件（D21）；
+- **备份**：`data/backup/<名>.<时间戳>.jsonl`，提交前写一份旧版，保留最近 3 份；
+- 加载优先级：内存草稿（`_load_drafts` 恢复，基线不一致则标 stale）→ 基线 `chunks.jsonl`；
+- **提交一致性**：提交时校验「文件名基线 sha12 == 当前 chunks.jsonl 的 sha12」，不一致拒绝（草稿已过期）；
+- **不做增量 diff 文件**：草稿/备份都是整份快照，简单、可审计、可回滚；
+- 旧的 `edits/` 覆盖层设计（`.meta.json` + 覆盖层优先级）已废弃，由草稿目录取代。
 
 ---
 

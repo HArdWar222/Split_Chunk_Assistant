@@ -74,15 +74,18 @@
 
 ## 5. P3 · 持久化（0.5–1 天）
 
+**状态：已完成（2026-11-05，改用无 meta 草稿设计，见 D21）** —— 产物目录改为 `data/chunks/<名>/`；草稿 `data/draft/<名>.<基线sha12>.chunks.jsonl`（2 秒防抖自动保存、`Ctrl+S`、切文件补存）；提交校验基线 → 备份 `data/backup/`（保留 3 份）→ 原子覆盖 `chunks.jsonl`（只写 15 字段）→ 删草稿；放弃/导出可用。单测 181 项（新增 `test_drafts.py` 8 例）。
+（下列 T3.x 是最初 overlay 方案的任务 ID，保留作对照；`overlay.py`/`.meta.json` 方案未采用。）
+
 | ID | 任务 | 验收 |
 |---|---|---|
-| T3.1 | `overlay.py`：写 `edits/*.jsonl` + `.extras.jsonl` + `.meta.json`，sha256 校验 | 保存后重开一致 |
-| T3.2 | `/api/save`、`/api/reset`、`/api/export`（15 字段 JSONL 下载） | 导出文件可被 `contracts.Chunk` 解析 |
-| T3.3 | stale 检测与黄条提示 | 改源文件后提示「源已变更」 |
-| T3.4 | gate 面板：`gate_chunks` + 阈值调整 | 质检结果与 FAC-RAG 一致 |
-| T3.5 | `test_overlay.py` / `test_api.py` | pytest 全绿 |
+| T3.1 | `drafts.py`：草稿读写 + 基线文件名 + 备份 + 原子提交 | 保存→重开/重启一致；提交后只含 15 字段 |
+| T3.2 | `/api/draft/save|discard|commit`、`/api/export` | 导出文件可被 `contracts.Chunk` 解析 |
+| T3.3 | stale 检测与徽章提示 | 基线被外部改动后草稿标过期、提交被拒 |
+| T3.4 | gate 面板：`gate_chunks` + 阈值调整 | 质检结果与 FAC-RAG 一致（P5 再做） |
+| T3.5 | `test_drafts.py` / `test_api.py` | 单测全绿（181） |
 
-**演示**：改→保存→重启进程→再次打开还是改后的版本；导出 JSONL 可跑索引流程。
+**演示**：改→保存草稿→刷新/重启后恢复→提交→原文件更新、生成备份、导出 JSONL 可跑索引流程。
 
 ---
 

@@ -37,9 +37,9 @@
 - **从切片开头选中 → 扩展该切片（P2 已实现，文字 / 表格行都支持）**：在原文里从某个切片的**第一行行首**开始拖选、一直拖过这个切片的最后一行，再点「＋ 新增」/右键「选区新增」，弹层会切成「⤢ 扩展切片」：标题/说明/按钮都改成「扩展」，正文与条号预填成扩展后的结果，提交后是**在原切片上扩展**（把越过中间被覆盖的块并进来，不新增一块），`Ctrl+Z` 一次撤销。表格同理：在表格里从某个行区间切片的第一行选到最后一行以外，右键会显示「用选区扩展 #N 切片」；扩展后 `law_num` 行区间自动更新（如 `工作表格 表A.4 第1-2行` → `第1-5行`），正文按原文行/表格行重建。后端用原子操作 `extend`（校验连续、合并正文、保留目标 id、重排 id），编辑边界一律以「行」为单位（文本=源文件行，表格=`tr` 行）；
 - **自动分 part（P2 已实现，设置里可开）**：设置面板勾选「自动分 part」并给 `max_chars`（默认 800）/`min_part_chars`（默认 200）。开启后每次加载文档：**文本块**按行装箱均分成 `-p1..-pN` 多个 part（每段重复面包屑、尾段不足 200 字符时与上一段重排、单行超长才在 `。；，` 处硬切）；**表格块只做「多行超长 → 按行区间拆成独立表格块」**（`law_num` 写 `表X 第a-b行`；单行超大的表格保持整块不拆，不做列组 part、不做列内硬切）。新块继承原块的行区间（span），所以拆分后对齐率仍是 100%，可正常高亮；
 - 手改过的正文标 `manual` 徽章、`align = manual`，派生字段（`token_len` / `chunk_hash`）自动重算；
-
+- **P3 落盘：草稿 → 提交（已实现）**：编辑只在内存进行，**自动保存草稿**（2 秒防抖、`Ctrl+S` 立即保存、切换文件时自动补存）写到 `data/draft/<名>.<基线sha12>.chunks.jsonl`；顶栏徽章显示「● 有未保存修改 / 草稿已保存未提交 / ⚠ 草稿已过期」，左栏文件行显示「草稿」标记。点「**提交**」时校验基线（正式 chunks 的 sha12 必须等于草稿文件名里的基线），一致才把旧版备份到 `data/backup/<名>.<时间戳>.jsonl`（保留最近 3 份）→ 原子替换 `data/chunks/<名>/chunks.jsonl`（只写 15 个契约字段，`token_len`/`chunk_hash` 重算、id 按位置重排）→ 删除草稿；「**放弃**」删草稿回到基线，「**导出**」下载当前块（含未提交修改）的 jsonl。草稿跟着**文件**走：切到别的文件、刷新页面、重启服务后再打开都能恢复；同一文件若基线已被外部改动，旧草稿会被忽略并提示过期；
 - 快捷键：`Ctrl+Z` 撤销、`Ctrl+Y / Ctrl+Shift+Z` 重做、`Ctrl+Shift+N` 新增、`Ctrl+Enter` 拆当前块、`Delete` 删当前块、`Ctrl+K` 搜索、`Esc` 关弹层；
-- P2 的编辑只在内存（按文件隔离、按会话隔离），刷新页面回到基线；**P3 才落盘**。
+- P2 的编辑只在内存（按文件隔离、按会话隔离），刷新页面回到基线；**P3 起可保存草稿并提交落盘**（见上一条）。
 
 P1 的只读能力（三栏联动、拖选反查、原文左侧范围条、深链 `#doc=<key>`、对齐如实分档 exact / substr / table_rows / table_label / miss）
 全部保留。首批验收目标「消防法 74/74」达成；全语料 12 718 块中 **12 626 块可定位（99.28%）**，
@@ -176,29 +176,33 @@ python -m chunk_studio.server --port 8790 --open
 
 ## 唯一数据源：本地「两目录」（data/source + data/chunks）
 
-工作台只读本地两目录（2026-11-04 起移除 FAC-RAG `_manifest.json` 清单模式）：
+工作台只读本地两目录（2026-11-04 起移除 FAC-RAG `_manifest.json` 清单模式；2026-11-05 起每个文档的切片放进独立文件夹）：
 
 ```
 data/
 ├── source/                      ← 原文件 .md，可带子目录（子目录名进分组）
 │   └── 2025版山东省自由裁量标准.md
-└── chunks/                      ← 切片，文件名与源文件同名
-    ├── 2025版山东省自由裁量标准.chunks.jsonl    ← 必需（每行一个块，缺 token_len 会现算）
-    └── 2025版山东省自由裁量标准.extras.jsonl    ← 可选（每行平铺或 {"id","extras"} 嵌套）
+├── chunks/                      ← 切片：每个文档一个文件夹
+│   └── 2025版山东省自由裁量标准/
+│       ├── chunks.jsonl         ← 必需（15 字段；缺 token_len 会现算）
+│       ├── extras.jsonl         ← 可选（每行平铺或 {"id","extras"} 嵌套）
+│       └── report.json          ← 可选（切块引擎报告，带 gate）
+├── draft/                       ← 未提交的草稿（自动保存；gitignore）
+└── backup/                      ← 提交前的旧版备份（保留最近 3 份；gitignore）
 ```
 
-- 加新文档：把 `.md` 丢进 `source/`、把 `<同名>.chunks.jsonl`（和可选的 `.extras.jsonl`）丢进 `chunks/`，然后点页面顶部「**刷新**」——它会重新扫描目录（`POST /api/reload`），不用重启服务；子目录名会成为分组名。
-- 两目录配对靠「同名 + 同相对路径」；`chunks/` 决定文件是否出现，`source/` 只作对照——缺源文件时文件仍列出，但打开会提示「源文件缺失」。
+- 加新文档最省事的方式：只把 `.md` 丢进 `source/`——自动切块引擎会生成 `chunks/<名>/` 三件套；已有切块包则手工建 `chunks/<名>/` 放 `chunks.jsonl`（+ 可选 `extras.jsonl`/`report.json`），再点顶部「**刷新**」（`POST /api/reload`），不用重启服务；`source/` 与 `chunks/` 的子目录名会成为分组名。
+- 配对靠「同名 + 同相对路径」；`chunks/<名>/chunks.jsonl` 决定文件是否出现，`source/` 只作对照——缺源文件时文件仍列出，但打开会提示「源文件缺失」。
 - `.extras.jsonl` 两种写法都支持：字段平铺（切块包风格）或 `{"id": …, "extras": {…}}` 嵌套（FAC-RAG 风格）。
 - 本地源没有 gate/sha256 等质检信息，界面对应位置显示「—」；对齐、编辑、表格视图、行选择全部照常可用。
-- 设置面板（⚙ 设置）里可改 `data_root`、端口、自动分 part 三项；`data_root` 必填（默认 `data/`，已 gitignore）。
+- 设置面板（⚙ 设置）里可改 `data_root`、端口、自动分 part 三项、自动切块三项；`data_root` 必填（默认 `data/`，已 gitignore）。
 
 ## 自动切块（SPLITCHUNK 引擎）
 
 `data/source/` 里出现新 `.md`、而 `chunks/` 里还没有同名切片时，工作台会自动调用切块引擎生成切片，再刷新左栏：
 
 - 引擎是上游 `chunking_v2`（0.1.4）的副本，放在 `vendor/splitchunk/`（随仓库提交，`vendor/splitchunk/UPSTREAM.md` 记录来源与 sha256、许可提醒）；设置里「切块引擎目录」留空即自动探测（`vendor/splitchunk`，找不到回退 `../SPLITCHUNK`）。
-- 工作台**不把引擎装进自己的进程**：每份文件起一次 `python -m chunking_v2.cli …--json` 子进程，产物 `<名>.chunks.jsonl / .extras.jsonl / .report.json` 直接写进 `chunks/`；子进程挂了只记录失败，不影响工作台。
+- 工作台**不把引擎装进自己的进程**：每份文件起一次 `python -m chunking_v2.cli …--json` 子进程，产物先写临时目录 `data/.tmp_chunk/<名>/`，再原子发布到 `chunks/<名>/`（`chunks.jsonl / extras.jsonl / report.json`）；子进程挂了只记录失败，不影响工作台。
 - 轮询间隔默认 3 秒（设置可改 1–60），mtime 小于 1.5 秒的文件先跳过（防半文件）；同一时刻只有一个切块任务。
 - `report.json` 里带 gate 结果，左栏文件行相应显示 ✓ / ⚠；源文件改过（sha256 变化）时被列为「过期」，默认不自动重切，避免重排 id 影响手改叠加层——需要重切就手动触发。
 - 手动：顶部「⚙ 切块」扫描待切文件并异步切块；工具栏左侧 chip 显示「切块中 n/m」「待切块 N 份」或上一次结果（8 秒）。
@@ -207,10 +211,10 @@ data/
 验收 / 自测口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 173 个测试
+python -m unittest discover -s tests -t . -v   :: 181 个测试
 ```
 
-- `/api/files` 合计 **4 个文件 / 1 175 块**（山东自由裁量 757 + 2464 104 + 2972 185 + 安全生产法 129），`mode=dirs`、单组 `data`
+- `/api/files` 以本地 `data/` 为准（示例环境 **9 个文件 / 1 944 块**：山东自由裁量 757、2464 104、2972 185、安全生产法 129，其余为后加入的法规），`mode=dirs`、单组 `data`
 - 实测：`data/2025版山东省自由裁量标准` 757 块 / 606 行，对齐 **756/757（99.87%）**；`/api/tables` 返回 687 张表（首表 headers `编号|违法行为|法律规定|处罚依据|裁量阶次|适用条件|处罚标准`）
 - `/api/doc?key=…` 返回原文行 + 切片（含 `span` 与 `align`）+ 统计；缺 key 400，未知 key / 源文件缺失 404
 - `/api/tables?key=…` 返回该文件所有表块的 `table_grid`（`chunk_id → {headers, rows, width, header_rows, note_from, table_label, table_title, table_mode, table_rows}`，最近 8 个文件缓存）；用于右栏表格可视化，缺 key 400、未知 key 404
@@ -220,6 +224,7 @@ python -m unittest discover -s tests -t . -v   :: 173 个测试
   `add` 可带 `span:[起始行,结束行]`（原文选区新增，1-based 闭区间）；插入位置用 `after_id`（之后）或 `before_id`（之前），都不传则追加到末尾；
   新增后按原文位置重排 id（新块拿它在列表里的序号，插入点之后的块顺延；多 part 组继续共用 base 序号），diff 用内容 LCS 配对，插入只报 `+1 ~0 -0`；
   拆分后块数 +1、diff 同步（拆分暂不重排 id，保持原有 id 语义）
+- P3 落盘：`POST /api/draft/save`（写 `data/draft/<名>.<基线sha12>.chunks.jsonl`）、`POST /api/draft/discard`、`POST /api/draft/commit`（校验基线 → 备份到 `data/backup/` 保留 3 份 → 原子替换 `chunks/<名>/chunks.jsonl`，只写 15 字段 → 删草稿）、`GET /api/export?key=…`（下载当前块 jsonl）；`/api/doc` 返回 `draft:{exists,stale,baseline12,saved_at}`，`/api/files` 每个文件带 `draft`/`draft_stale`
 - 静态页 `/`、`/static/app.js`、`/static/style.css` 均可直出
 
 全语料对齐实测（2026-11-04，`align_chunks`；含「整表单行复用 / 表题锚定 / 相似度兜底」三项改进）：
