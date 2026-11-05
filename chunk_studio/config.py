@@ -17,8 +17,12 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = REPO_ROOT / "config.json"
+from . import paths
+
+#: 只读资源根（web/、vendor/ 所在目录）。PyInstaller 冻结后是解压目录。
+REPO_ROOT = paths.resource_root()
+#: 默认配置文件位置（可写应用根下，PyInstaller 冻结后是 exe 同级）。
+CONFIG_PATH = paths.default_config_path()
 
 # 默认值：优先环境变量 FAC_ROOT，其次仓库的兄弟目录 FAC-RAG
 _DEFAULT_FAC_ROOT = os.environ.get("FAC_ROOT") or str(REPO_ROOT.parent / "FAC-RAG")
@@ -45,13 +49,17 @@ def _clean_path(value: object) -> str:
 
 
 def _abs_path(value: str) -> str:
-    """空串原样返回；相对路径按仓库根目录解析成绝对路径。"""
+    """空串原样返回；相对路径按可写应用根解析成绝对路径。
+
+    开发态应用根=仓库根；打包后是 exe 所在目录，``data_root="data"`` 就落在
+    exe 旁边的 ``data/``，与 ``_internal/`` 里的只读资源分开。
+    """
     text = str(value or "").strip()
     if not text:
         return ""
     path = Path(text)
     if not path.is_absolute():
-        path = REPO_ROOT / path
+        path = paths.app_root() / path
     return str(path)
 
 
@@ -143,7 +151,11 @@ class Config:
     def load(cls, path: Path | str | None = None) -> "Config":
         p = Path(path) if path else CONFIG_PATH
         if not p.is_file():
-            return cls()
+            if paths.is_frozen():
+                # 安装后的第一次启动：在 exe 同级生成最小配置（data_root 指向 data/）。
+                p = paths.ensure_default_config(p)
+            if not p.is_file():
+                return cls()
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:

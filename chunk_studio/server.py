@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .api import App
 from .config import Config, ConfigError, DEFAULT_PORT
+from .paths import default_config_path, ensure_data_layout
 from .studio import Studio
 from . import __phase__, __version__
 
@@ -139,9 +140,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    config_path = Path(args.config) if args.config else None
+    config_path = Path(args.config) if args.config else default_config_path()
     try:
-        studio = Studio(config_path=config_path)
+        cfg = Config.load(config_path)
+        if cfg.data_root:
+            try:
+                ensure_data_layout(cfg.data_root)
+            except OSError as exc:
+                print(f"数据目录不可写：{cfg.data_root}（{exc}）", file=sys.stderr, flush=True)
+                print("  请把程序放到有写权限的位置（例如用户目录），或在配置里改 data_root。", file=sys.stderr, flush=True)
+                return 2
+        studio = Studio(cfg=cfg, config_path=config_path)
         patch: dict = {}
         if args.fac_root:
             patch["fac_root"] = args.fac_root

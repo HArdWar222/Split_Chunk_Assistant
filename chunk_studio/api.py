@@ -19,9 +19,10 @@ from .chunker import ChunkerError
 from .config import ConfigError
 from .manifest import ManifestError, SourceMissingError
 from .ops import OpError, OpNotFound
+from .paths import web_dir
 from .studio import Studio
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = web_dir()
 
 STATIC_TYPES = {
     "index.html": "text/html; charset=utf-8",

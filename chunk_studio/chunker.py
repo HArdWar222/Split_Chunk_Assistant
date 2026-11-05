@@ -26,12 +26,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import REPO_ROOT, Config
+from .config import Config
 from .manifest import CHUNKS_NAME, EXTRAS_NAME_LOCAL, REPORT_NAME
+from .paths import fallback_engine_roots, vendor_root
+
 ENGINE_PACKAGE = "chunking_v2"
 CLI_MODULE = "chunking_v2.cli"
-VENDOR_ROOT = REPO_ROOT / "vendor" / "splitchunk"
-FALLBACK_ROOTS = (VENDOR_ROOT, REPO_ROOT.parent / "SPLITCHUNK")
+VENDOR_ROOT = vendor_root()
+FALLBACK_ROOTS = fallback_engine_roots()
 
 CHUNKS_SUFFIX = ".chunks.jsonl"
 EXTRAS_SUFFIX = ".extras.jsonl"
