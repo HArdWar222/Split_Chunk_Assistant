@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 from pathlib import Path
 
@@ -48,6 +49,43 @@ DOC_CACHE_SIZE = 8
 
 #: 表格视图缓存条数（table_grid 体积大，按文件懒加载）。
 TABLES_CACHE_SIZE = 8
+
+
+#: 自动分 part 的 id 后缀（``<块 id>-p2``）。
+_PART_SUFFIX_RE = re.compile(r"^(.*)-p\d+$")
+
+
+def _underlying_ids(chunks: list[dict], op: dict) -> dict:
+    """把「自动分 part」展示层里的 ``-pN`` 块 id 翻译回真实块 id。
+
+    分 part 只是 doc 载荷的展示结果；删除 / 合并等命令必须落在真实块上，
+    否则校验重放（不含自动分 part）会报「第 N 条命令（drop）失败：找不到切片」。
+    """
+    known = {str(chunk.get("id")) for chunk in chunks}
+
+    def fix(chunk_id):
+        cid = str(chunk_id)
+        if cid in known:
+            return chunk_id
+        match = _PART_SUFFIX_RE.match(cid)
+        if match and match.group(1) in known:
+            return match.group(1)
+        return chunk_id
+
+    fixed = dict(op)
+    for field in ("id", "before_id", "after_id"):
+        value = fixed.get(field)
+        if isinstance(value, str):
+            fixed[field] = fix(value)
+    ids = fixed.get("ids")
+    if isinstance(ids, (list, tuple)):
+        mapped: list = []
+        for chunk_id in ids:
+            target = fix(chunk_id)
+            if target not in mapped:
+                mapped.append(target)
+        fixed["ids"] = mapped
+    return fixed
 
 
 def _public_extras(extras: dict) -> dict:
@@ -541,12 +579,16 @@ class Studio:
         if not isinstance(op, dict):
             raise OpError("op 必须是 JSON 对象")
         base = self._base_doc(key)
-        candidate = list(self._ops.get(key) or []) + [op]
         draft = self._active_draft(key)
         if draft and draft.get("chunks"):
             start = [dict(chunk) for chunk in draft["chunks"]]
         else:
             start = base["chunks"]
+        if self.cfg.auto_part:
+            # 自动分 part 是展示层结果：命令里的 -pN 先翻译回真实块 id，
+            # 否则校验重放（不含自动分 part）会找不到切片。
+            op = _underlying_ids(start, op)
+        candidate = list(self._ops.get(key) or []) + [op]
         apply_ops(start, candidate, law_name=base["law_name"])  # 只做校验
         self._ops[key] = candidate
         self._redo[key] = []
