@@ -340,10 +340,14 @@
     var end = chunk.span[1];
     var found = [];
     el.source.querySelectorAll(".line.table-block").forEach(function (block) {
+      if (found.length >= 4) return;
       var line = parseInt(block.dataset.line, 10);
       if (!isFinite(line) || line < start || line > end) return;
       var table = block.querySelector(".tblwrap table");
       if (!table) return;
+      // 巨型整表（如一行几十万字符的 HTML 表）不往卡片里克隆，避免渲染卡死
+      if (table.querySelectorAll("tr").length > 120) return;
+      if ((table.outerHTML || "").length > 120000) return;
       var clone = table.cloneNode(true);
       clone.querySelectorAll(".hl, .row-active, .sel-row, .chunk-row, .row-gap").forEach(function (node) {
         node.classList.remove("hl", "row-active", "sel-row", "chunk-row", "row-gap");
@@ -372,7 +376,7 @@
         '<pre class="chunk-raw-pre">' + escapeHtml(raw) + '</pre></details>';
     }
 
-    var sourceTables = sourceTablesForChunk(chunk);
+    var sourceTables = (chunk.chunk_kind === "table" || chunk.chunk_kind === "appendix") ? [] : sourceTablesForChunk(chunk);
     if (sourceTables.length) {
       var html = '<pre class="chunk-body">' + escapeHtml(raw) + '</pre>';
       sourceTables.forEach(function (item) {
