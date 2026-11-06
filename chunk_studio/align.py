@@ -304,10 +304,56 @@ def align_chunks(
         span: list[int] | None = None
         status = "miss"
 
-        if kind == "table":
+        # 编辑器在提交时把界面里的行区间写进侧车（extras["span"]），
+        # 这里优先采用它，保证「提交 → 重新加载」后对齐结果与编辑时一致。
+        pin = ex.get("span")
+        if (
+            isinstance(pin, list)
+            and len(pin) == 2
+            and all(isinstance(v, int) for v in pin)
+            and 0 <= pin[0] < pin[1] <= len(ns)
+        ):
+            span = [pin[0], pin[1]]
+            status = "approx"
+            cursor = max(cursor, span[1])
+
+        if span is None and kind == "table":
             span, status = _align_table(ch, ex, ns, npipe, source_lines, cursor)
             if span:
                 cursor = max(cursor, span[1])
+
+        if span is None:
+            tlines = [t for t in (norm_line(x, rules) for x in str(ch.get("chunk") or "").split("\n")) if t]
+            first_t = tlines[0] if tlines else ""
+
+            # 手工表格块（段落类型、正文以「表X」表题开头）：按表题锚定，
+            # 结束位置收在「下一条表题」之前，避免把后面几张表吞进同一区间。
+            if first_t and RE_CAPTION.match(first_t):
+                cap = _scan(ns, first_t, max(0, cursor - 2))
+                if cap < 0:
+                    cap = _scan(ns, first_t, 0)
+                if cap >= 0:
+                    stop = len(ns)
+                    for k in range(cap + 1, len(ns)):
+                        if ns[k] and RE_CAPTION.match(ns[k]):
+                            stop = k
+                            break
+                    last = cap
+                    j = cap + 1
+                    for t in tlines[1:]:
+                        k = j
+                        limit = min(stop, j + 200)
+                        while k < limit and ns[k] != t and (not t or t not in ns[k]):
+                            k += 1
+                        if k < limit:
+                            last = k
+                            j = k + 1
+                    # 表题锚定也可能与上一块重叠（正文各自从同一张表题开始），
+                    # 起点至少推进到 cursor，避免同一行被两块同时覆盖。
+                    start = max(cap, min(cursor, last))
+                    span = [start, last + 1]
+                    status = "exact" if ns[cap] == first_t else "substr"
+                    cursor = max(cursor, span[1])
 
         if span is None:
             tlines = [t for t in (norm_line(x, rules) for x in str(ch.get("chunk") or "").split("\n")) if t]

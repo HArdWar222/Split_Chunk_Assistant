@@ -230,6 +230,22 @@ class AlignTableTest(unittest.TestCase):
         self.assertEqual(aligned[0]["span"][1], 6)  # 表C.2 的表行是索引 5
 
 
+class PinnedSpanTest(unittest.TestCase):
+    def test_pinned_span_from_extras(self):
+        lines = ["第一条 甲", "第二条 乙", "第三条 丙"]
+        chunks = [{"id": "a", "chunk": "完全不相关", "chunk_kind": "paragraph"}]
+        out = align_chunks(chunks, lines, {"a": {"span": [1, 3]}})
+        self.assertEqual(out[0]["span"], [1, 3])
+        self.assertEqual(out[0]["status"], "approx")
+
+    def test_caption_chunk_stops_before_next_caption(self):
+        lines = ["表A.1 甲表", "行一", "行二", "表A.2 乙表", "行三"]
+        chunks = [{"id": "a", "chunk": "表A.1 甲表\n行一\n行二\n行三", "chunk_kind": "paragraph"}]
+        out = align_chunks(chunks, lines)
+        self.assertEqual(out[0]["span"], [0, 3])
+        self.assertEqual(out[0]["status"], "exact")
+
+
 class SummarizeTest(unittest.TestCase):
     def test_summarize_counts(self):
         aligned = [

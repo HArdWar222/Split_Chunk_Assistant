@@ -116,6 +116,26 @@ class CommitDraftTest(DraftTestBase):
         self.assertFalse(fresh_doc["draft"]["exists"])
         self.assertFalse(fresh_doc["dirty"])
 
+    def test_commit_writes_view_spans_to_extras(self):
+        self.edit_first()
+        status, before = self.post("/api/draft/save", {"key": self.key})
+        self.assertEqual(status, 200)
+        spans_before = {c["id"]: c.get("span") for c in before["chunks"]}
+        status, doc = self.post("/api/draft/commit", {"key": self.key})
+        self.assertEqual(status, 200)
+        spans_after = {c["id"]: c.get("span") for c in doc["chunks"]}
+        self.assertEqual(spans_after, spans_before)
+        from chunk_studio import drafts as drafts_mod
+
+        extras_file = drafts_mod.extras_path(self.chunks_path, "测试包法规")
+        rows = _read_jsonl(extras_file)
+        pinned = {r["id"]: (r.get("extras") if isinstance(r.get("extras"), dict) else r).get("span") for r in rows}
+        first_id = sorted(spans_before)[0]
+        a, b = spans_before[first_id]
+        self.assertEqual(pinned.get(first_id), [a - 1, b])  # 侧车里是 0-based 半开区间
+        # 正式 chunks 仍只写契约字段
+        self.assertNotIn("span", _read_jsonl(self.chunks_path)[0])
+
     def test_commit_without_draft_fails(self):
         status, doc = self.post("/api/draft/commit", {"key": self.key})
         self.assertEqual(status, 400)

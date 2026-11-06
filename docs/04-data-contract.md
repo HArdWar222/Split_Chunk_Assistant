@@ -202,3 +202,12 @@ metrics 共 26 项，覆盖行覆盖率、目次泄漏、坏块比例、条号�
 - 展示与过滤：`chunk_kind`、`law_type`、`law_level`、`part_index/part_total`；
 - 去重与审计：`chunk_hash`；
 - **本工具的编辑不改变上述消费方式**：导出 JSONL 直接可被现有索引/评估流程读取。
+
+## 7. 提交时写入的展示区间（P3）
+
+- 编辑器里的每块行区间（1-based 闭区间，如「第 12–115 行」）在**提交**时写入
+  `extras.jsonl` 对应行的 `span` 字段，换算成 **0-based 半开区间** `[start, end)`；
+  `part_span` 同理。
+- `chunks.jsonl` 仍然只写 15 个契约字段，`span` 不进入正文合约。
+- 下次打开文档时，对齐层优先使用 extras 里的 `span`（状态记为 `approx`），不再走
+  启发式重猜；没有 `span` 的旧文件仍按启发式对齐。

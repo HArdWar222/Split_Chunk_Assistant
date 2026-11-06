@@ -265,6 +265,12 @@ class Studio:
         entry = self.bridge_for(key).manifest.get(key)
         chunks_path = Path(entry.jsonl)
         saved = self.save_draft(key)  # 先把内存里的最新状态写进草稿
+        # 把编辑器里的行区间（span/part_span）写进侧车，提交后重新加载时
+        # 优先按它对齐，避免「提交后切好的块又被启发式对齐合并/重叠」。
+        draft_chunks = drafts.read_chunks(draft["path"])
+        drafts.merge_extras_spans(
+            drafts.extras_path(chunks_path, entry.law_name), draft_chunks
+        )
         self._base_doc(key)
         result = drafts.commit_draft(
             chunks_path,

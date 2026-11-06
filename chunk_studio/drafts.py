@@ -151,6 +151,70 @@ def contract_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def extras_path(chunks_path: Path | str, law_name: str) -> Path:
+    """文档侧车路径（新命名优先，兼容早期统一命名的 extras.jsonl）。"""
+    doc_dir = Path(chunks_path).parent
+    named = doc_dir / f"{law_name}.extras.jsonl"
+    legacy = doc_dir / "extras.jsonl"
+    if named.is_file() or not legacy.is_file():
+        return named
+    return legacy
+
+
+def merge_extras_spans(extras_path: Path | str, chunks: list[dict[str, Any]]) -> Path:
+    """把界面行区间写进侧车（``span`` / ``part_span``），供重新加载时对齐使用。
+
+    只改视图字段，引擎写入的 ``table_grid`` 等字段原样保留；侧车两种写法
+    （``{"id":…,"extras":{…}}`` 嵌套 / 字段平铺）都兼容。
+    """
+    path = Path(extras_path)
+    rows: list[dict[str, Any]] = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cid = str(row.get("id") or "")
+        if cid:
+            by_id[cid] = row
+    out: list[dict[str, Any]] = list(rows)
+    for chunk in chunks:
+        cid = str(chunk.get("id") or "")
+        if not cid:
+            continue
+        span = chunk.get("span")
+        part_span = chunk.get("part_span")
+        if not (
+            (isinstance(span, list) and len(span) == 2)
+            or (isinstance(part_span, list) and len(part_span) == 2)
+        ):
+            continue
+        row = by_id.get(cid)
+        if row is None:
+            row = {"id": cid, "extras": {}}
+            by_id[cid] = row
+            out.append(row)
+        nested = row.get("extras")
+        ex = nested if isinstance(nested, dict) else row
+        # 界面上的 span 是 1-based 闭区间（第 a–b 行），侧车/对齐用
+        # 0-based 半开区间（[start, end)），这里做一次换算。
+        if isinstance(span, list) and len(span) == 2:
+            a, b = int(span[0]), int(span[1])
+            if a >= 1 and b >= a:
+                ex["span"] = [a - 1, b]
+        if isinstance(part_span, list) and len(part_span) == 2:
+            a, b = int(part_span[0]), int(part_span[1])
+            if a >= 1 and b >= a:
+                ex["part_span"] = [a - 1, b]
+    write_atomic(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in out))
+    return path
+
+
 def commit_draft(
     chunks_path: Path | str,
     draft_path: Path | str,
