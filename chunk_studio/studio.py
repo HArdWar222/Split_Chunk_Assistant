@@ -386,6 +386,38 @@ class Studio:
         return self.config_payload()
 
     # -- 单文件三栏载荷（P1 只读 + P2 会话内编辑） -----------------------
+    @staticmethod
+    def _match_extras(chunks: list[dict], extras: dict[str, dict]) -> dict[str, dict]:
+        """按块内容把 extras 重新对号。
+
+        早期提交只按列表位置重排了 chunk id，sidecar 里的表网格/短语仍挂在旧 id
+        上；这里优先用 id，内容对不上时按 embed_text 与正文做一次重匹配。
+        """
+
+        def norm(text: object) -> str:
+            return "".join(str(text or "").split())
+
+        by_text: dict[str, dict] = {}
+        for ex in extras.values():
+            text = norm(ex.get("embed_text"))
+            if text and text not in by_text:
+                by_text[text] = ex
+
+        matched: dict[str, dict] = {}
+        for chunk in chunks:
+            cid = chunk.get("id")
+            body = norm(chunk.get("chunk"))
+            ex = extras.get(cid)
+            if ex is not None:
+                embed = norm(ex.get("embed_text"))
+                if embed and body and embed != body:
+                    ex = by_text.get(body)
+            elif body:
+                ex = by_text.get(body)
+            if ex is not None:
+                matched[cid] = ex
+        return matched
+
     def _base_doc(self, key: str) -> dict:
         """基线文档：源行 + 视图块 + 对齐，缓存最近 DOC_CACHE_SIZE 个文件。
 
@@ -401,7 +433,7 @@ class Studio:
         bridge = self.bridge_for(key)
         entry = bridge.manifest.get(key)
         chunks = bridge.chunks(key)
-        extras = bridge.extras(key)
+        extras = self._match_extras(chunks, bridge.extras(key))
         source_path = locate_source(self.cfg, entry, default_roots=self._default_roots)
         lines = read_lines(source_path)
         aligned = align_chunks(chunks, lines, extras)
@@ -597,7 +629,8 @@ class Studio:
 
         bridge = self.bridge_for(key)
         entry = bridge.manifest.get(key)
-        extras = bridge.extras(key)
+        chunks = bridge.chunks(key)
+        extras = self._match_extras(chunks, bridge.extras(key))
         tables: dict[str, dict] = {}
         for chunk_id, extra in extras.items():
             grid = extra.get("table_grid")

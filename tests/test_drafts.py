@@ -136,6 +136,35 @@ class CommitDraftTest(DraftTestBase):
         # 正式 chunks 仍只写契约字段
         self.assertNotIn("span", _read_jsonl(self.chunks_path)[0])
 
+    def test_merge_extras_spans_heals_stale_ids_by_content(self):
+        from chunk_studio import drafts as drafts_mod
+
+        with temp_dir() as base:
+            doc_dir = Path(base) / "chunks" / "甲法"
+            doc_dir.mkdir(parents=True)
+            extra_file = doc_dir / "甲法.extras.jsonl"
+            extra_file.write_text(
+                json.dumps(
+                    {
+                        "id": "旧-0001",
+                        "extras": {"embed_text": "第一条 甲", "table_grid": {"headers": ["a"]}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            drafts_mod.merge_extras_spans(
+                extra_file,
+                [{"id": "甲法-0001", "chunk": "第一条 甲", "span": [3, 3]}],
+            )
+            rows = _read_jsonl(extra_file)
+            self.assertEqual(len(rows), 1)  # 不重复追加行
+            self.assertEqual(rows[0]["id"], "甲法-0001")  # id 按内容认领后改写
+            ex = rows[0]["extras"]
+            self.assertEqual(ex["span"], [2, 3])
+            self.assertEqual(ex["table_grid"]["headers"], ["a"])  # 引擎字段保留
+
     def test_commit_without_draft_fails(self):
         status, doc = self.post("/api/draft/commit", {"key": self.key})
         self.assertEqual(status, 400)

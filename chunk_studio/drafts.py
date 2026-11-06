@@ -178,10 +178,15 @@ def merge_extras_spans(extras_path: Path | str, chunks: list[dict[str, Any]]) ->
             if isinstance(row, dict):
                 rows.append(row)
     by_id: dict[str, dict[str, Any]] = {}
+    by_text: dict[str, dict[str, Any]] = {}
     for row in rows:
         cid = str(row.get("id") or "")
         if cid:
             by_id[cid] = row
+        ex = row.get("extras") if isinstance(row.get("extras"), dict) else row
+        embed = str(ex.get("embed_text") or "")
+        if embed:
+            by_text.setdefault("".join(embed.split()), row)
     out: list[dict[str, Any]] = list(rows)
     for chunk in chunks:
         cid = str(chunk.get("id") or "")
@@ -195,6 +200,15 @@ def merge_extras_spans(extras_path: Path | str, chunks: list[dict[str, Any]]) ->
         ):
             continue
         row = by_id.get(cid)
+        if row is None:
+            # 早期版本提交按顺序重编了 id，但侧车还是引擎原始 id；
+            # 内容没变的块用 embed_text 认领回原行，避免重复追加行。
+            text_key = "".join(str(chunk.get("chunk") or "").split())
+            if text_key:
+                row = by_text.get(text_key)
+            if row is not None and str(row.get("id") or "") != cid:
+                row["id"] = cid
+                by_id[cid] = row
         if row is None:
             row = {"id": cid, "extras": {}}
             by_id[cid] = row

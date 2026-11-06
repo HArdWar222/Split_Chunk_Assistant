@@ -30,6 +30,7 @@ RE_TAG = re.compile(r"<[^>]+>")
 RE_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 RE_PAGE_TAIL = re.compile(r"[.．·…]{3,}\s*\d+\s*$")
 RE_CONT_SUFFIX = re.compile(r"（续）\s*$")
+RE_TABLE_NO = re.compile(r"表\s*([A-Za-z]?\s*[.．]?\s*\d+)")
 RE_CAPTION = re.compile(r"^表\s*[A-Za-z]?\s*[.．]?\s*\d")
 
 DEFAULT_CLEAN_RULES = ("latex_escapes",)
@@ -296,6 +297,7 @@ def align_chunks(
     ns = [norm_line(line, rules) for line in source_lines]
     npipe: list[str | None] = [None] * len(ns)
     cursor = 0
+    label_span: dict[str, list[int]] = {}
     out: list[dict] = []
 
     for ch in chunks:
@@ -387,6 +389,40 @@ def align_chunks(
                     status = "table_label"
                     cursor = max(cursor, i + 1)
                     break
+
+        # 老版本提交只写了 15 字段，extras 里的表网格又按旧 id 挂着；这类
+        # 「内容对不上、grid 也找不到」的表格块最后按表号认领已知区间
+        # （同一张表的所有块在源文里通常落在同一行/同一段）。
+        label_match = RE_TABLE_NO.search(
+            " ".join(
+                [
+                    str(ch.get("law_num") or ""),
+                    str(ex.get("table_label") or ""),
+                ]
+            )
+        )
+        label_key = "".join(label_match.group(1).split()) if label_match else ""
+        if span is None and kind == "table" and label_key:
+            ref = label_span.get(label_key)
+            if ref is not None:
+                span = list(ref)
+                status = "table_label"
+        if span is None and kind == "table" and cursor > 0:
+            # 同一张超长 HTML 表里，前一块若就落在这张表的单行上，后续行
+            # （表格拆出来的块）也归到这一行。
+            prev_span = next(
+                (item["span"] for item in reversed(out) if item.get("span")), None
+            )
+            if (
+                prev_span
+                and len(prev_span) == 2
+                and prev_span[1] - prev_span[0] == 1
+                and "<table" in str(source_lines[prev_span[0]] or "").lower()
+            ):
+                span = list(prev_span)
+                status = "table_label"
+        if span and kind == "table" and label_key:
+            label_span.setdefault(label_key, list(span))
 
         out.append({"span": span, "status": status})
 

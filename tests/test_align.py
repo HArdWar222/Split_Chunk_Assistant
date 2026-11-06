@@ -238,6 +238,33 @@ class PinnedSpanTest(unittest.TestCase):
         self.assertEqual(out[0]["span"], [1, 3])
         self.assertEqual(out[0]["status"], "approx")
 
+    def test_table_label_fallback_reuses_known_span(self):
+        lines = ["表1 甲表", "行一", "行二"]
+        chunks = [
+            {"id": "a", "chunk": "表1 甲表", "chunk_kind": "table", "law_num": "表1 第1-1行"},
+            {
+                "id": "b",
+                "chunk": "第二部分 裁量细则 · 表1\n不存在的行",
+                "chunk_kind": "table",
+                "law_num": "第二部分 裁量细则 表1 第2-2行",
+            },
+        ]
+        out = align_chunks(chunks, lines, {"a": {"span": [0, 1]}})
+        self.assertEqual(out[0]["span"], [0, 1])
+        self.assertEqual(out[1]["span"], [0, 1])  # 同表号复用已知区间
+        self.assertEqual(out[1]["status"], "table_label")
+
+    def test_prev_single_table_line_fallback(self):
+        lines = ["<table><tr><td>甲</td></tr></table>", "其他"]
+        chunks = [
+            {"id": "a", "chunk": "甲表", "chunk_kind": "table", "law_num": "表1 第1-1行"},
+            {"id": "b", "chunk": "无关正文", "chunk_kind": "table", "law_num": "第2行"},
+        ]
+        out = align_chunks(chunks, lines, {"a": {"span": [0, 1]}})
+        self.assertEqual(out[0]["span"], [0, 1])
+        self.assertEqual(out[1]["span"], [0, 1])  # 上一块落在单行 <table> 上，沿用该行
+        self.assertEqual(out[1]["status"], "table_label")
+
     def test_caption_chunk_stops_before_next_caption(self):
         lines = ["表A.1 甲表", "行一", "行二", "表A.2 乙表", "行三"]
         chunks = [{"id": "a", "chunk": "表A.1 甲表\n行一\n行二\n行三", "chunk_kind": "paragraph"}]
