@@ -879,6 +879,12 @@
         btn.dataset.key = file.key;
 
         var badges = [];
+        var reviewState = file.review_state || "none";
+        var reviewLabel = file.review_label || "未审核";
+        badges.push(
+          "<span class='review-dot review-" + escapeHtml(reviewState) + "' title='审核状态：" +
+          escapeHtml(reviewLabel) + "'></span>"
+        );
         if (file.local) {
           badges.push("<span class='badge badge-local'>本地</span>");
         } else if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
@@ -2773,7 +2779,26 @@
         ? ("已恢复草稿（未提交）：继续编辑会自动保存；点「提交」覆盖正式切片，或「放弃」回到基线。")
         : "");
     updateDraftBadge(doc);
+    applyReviewToTree(doc);
     scheduleDraftAutosave();
+  }
+
+  function applyReviewToTree(doc) {
+    if (!doc || !doc.review || !state.selected) return;
+    var key = state.selected.key;
+    var changed = false;
+    (state.data && state.data.groups || []).forEach(function (group) {
+      (group.files || []).forEach(function (file) {
+        if (file.key !== key) return;
+        if (file.review_state !== doc.review.state) {
+          file.review_state = doc.review.state;
+          file.review_label = doc.review.label;
+          file.review_updated_at = doc.review.updated_at;
+          changed = true;
+        }
+      });
+    });
+    if (changed) renderTree();
   }
 
   // ---------- P3 草稿 ----------

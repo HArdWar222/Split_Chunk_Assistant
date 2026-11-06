@@ -952,3 +952,11 @@ body.row-picking { user-select: none; }
 .mixed-table-head { font-size: 12px; color: #64748b; margin: 10px 0 4px; }
 .mixed-table .tblwrap { max-height: 320px; overflow: auto; }
 
+/* ---- P3 审核状态三态点（红=未审核、黄=审核中、绿=已审核） ---- */
+.review-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  margin-right: 6px; flex: none; border: 1px solid rgba(0, 0, 0, .08);
+}
+.review-dot.review-none { background: #ef4444; }
+.review-dot.review-in_review { background: #f59e0b; }
+.review-dot.review-reviewed { background: #16a34a; }
