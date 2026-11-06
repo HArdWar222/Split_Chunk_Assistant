@@ -410,7 +410,10 @@ class Studio:
             ex = extras.get(cid)
             if ex is not None:
                 embed = norm(ex.get("embed_text"))
-                if embed and body and embed != body:
+                pinned = isinstance(ex.get("span"), list) and len(ex.get("span")) == 2
+                if not pinned and embed and body and embed != body:
+                    # 提交写入的行区间是权威的（正文被改过时 embed_text 仍是
+                    # 引擎旧正文），只有没带 span 的旧侧车行才按内容重挂。
                     ex = by_text.get(body)
             elif body:
                 ex = by_text.get(body)

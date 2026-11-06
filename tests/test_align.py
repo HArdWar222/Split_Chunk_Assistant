@@ -1,4 +1,4 @@
-"""align.py 的单测（纯函数，不依赖 FAC-RAG / 真实语料）。
+﻿"""align.py 的单测（纯函数，不依赖 FAC-RAG / 真实语料）。
 
 覆盖：文本规范化、面包屑剥离、单调扫描、条文/段落对齐、表格行对齐、未对齐分档。
 """
@@ -290,5 +290,28 @@ class SummarizeTest(unittest.TestCase):
         self.assertNotIn("md_bold", DEFAULT_CLEAN_RULES)
 
 
+class TocSkipTest(unittest.TestCase):
+    """正文首行不能先撞上目录条目（``3 术语和定义....1``）。"""
+
+    def test_heading_skips_toc_lines(self) -> None:
+        lines = [
+            "目  次",
+            "1 范围....1",
+            "3 术语和定义....1",
+            "",
+            "## 3 术语和定义",
+            "下列术语和定义适用于本文件。",
+        ]
+        ns = [norm_line(line) for line in lines]
+        self.assertEqual(_scan(ns, norm_line("术语和定义"), 0), 4)
+
+    def test_toc_target_can_still_match_toc_line(self) -> None:
+        lines = ["目  次", "3 术语和定义....1", "", "## 3 术语和定义"]
+        ns = [norm_line(line) for line in lines]
+        target = norm_line("3 术语和定义....1")
+        self.assertEqual(_scan(ns, target, 0), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
+

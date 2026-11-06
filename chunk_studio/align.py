@@ -144,6 +144,9 @@ def _is_table_line(raw: str) -> bool:
     return low.startswith("<table") or ("<table" in low and "<tr" in low)
 
 
+RE_TOC_LINE = re.compile(r"\.{2,}\s*\d+\s*$")
+
+
 def _scan(lines: list[str], target: str, start: int, *, allow_substr: bool = True) -> int:
     """从 start 起找第一个等于 target（或包含 target）的行。
 
@@ -157,10 +160,16 @@ def _scan(lines: list[str], target: str, start: int, *, allow_substr: bool = Tru
     if not target:
         return -1
     n = len(lines)
+    toc_target = bool(RE_TOC_LINE.search(target))
     for i in range(start, n):
-        if lines[i] == target:
+        cand = lines[i]
+        if RE_TOC_LINE.search(cand) and not toc_target:
+            # 目录行（``3 术语和定义....1``）里也含标题文字，匹配标题时必须跳过，
+            # 否则块会锚到目录而不是真正的章节行。
+            continue
+        if cand == target:
             return i
-        if allow_substr and len(target) >= 2 and target in lines[i]:
+        if allow_substr and len(target) >= 2 and target in cand:
             return i
     if len(target) < SIMILAR_MIN_LEN:
         return -1
@@ -169,6 +178,8 @@ def _scan(lines: list[str], target: str, start: int, *, allow_substr: bool = Tru
     for i in range(start, min(n, start + SIMILAR_WINDOW)):
         cand = lines[i]
         if not cand:
+            continue
+        if RE_TOC_LINE.search(cand) and not toc_target:
             continue
         if abs(len(cand) - len(target)) > max(8, len(target) // 4):
             continue
