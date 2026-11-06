@@ -63,6 +63,7 @@ C:\Users\QiuYe\Desktop\Split_assistant\
 │   ├── autopart.py          (~260 行) 自动分 part（文本均分 / 表格按行拆块）
 │   ├── chunker.py           (~410 行) SPLITCHUNK 引擎定位 / 待切扫描 / 子进程 CLI / WatchService（轮询 + 单 worker）
 │   ├── drafts.py            (~200 行) 草稿读写 / 基线校验 / 备份 / 提交 / 导出
+│   ├── status.py            (~120 行) 文件级审核三态（data/status + chunks 指纹校验）
 │   └── web\
 │       ├── index.html
 │       ├── style.css

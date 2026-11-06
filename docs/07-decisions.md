@@ -154,3 +154,21 @@
 | Q3 | 人工修改是否要纳入 git 版本管理 | 默认 gitignore；需要时手工提交 |
 | Q4 | 多人协作 / 权限 | 本期不做，单人本地工具 |
 | Q5 | 是否把 P5 patch 直接合入 FAC-RAG 主线 | 先在 FAC-RAG 开 PR，独立评审 |
+
+## D22 · 文件级审核状态：三态圆点 + 指纹校验（2026-11-06）
+
+**背景**：用户需要一眼看出每个文件「有没有人审过」。不做块级审核，只做文件级。
+
+**决定**：
+- 状态只有三态：`none`（未审核，红）、`in_review`（审核中，黄）、`reviewed`（已审核，绿）。
+- 状态文件放 `data/status/<名>.json`：`{state, prior, baseline12, updated_at}`。`baseline12` 是当时
+  `chunks.jsonl` 的 sha256 前 12 位；读取时若指纹对不上（外部覆盖、重新切块），状态自动视为 `none`。
+- 转移：编辑（op / 保存草稿 / 重做）→ `in_review`；提交 → `reviewed`；放弃 / 重置 / 撤销到空 → 回到
+  编辑前状态（`prior` 记着之前是否 `reviewed`）。
+- 前端只在左栏文件行画一个 8px 圆点 + title，不占空间；`/api/files` 与 `/api/doc` 都带
+  `review_state`/`review_label`，编辑后前端实时更新，不用刷新。
+- 不新增数据库、不写进 `chunks.jsonl`（15 字段契约不变），`data/status/` 与 `data/draft/`、`data/backup/`
+  一样属于本地工作区数据（gitignore）。
+
+**后果**：同一文件多人协作仍需外部约定；状态可能因人工拷贝 chunks 而失效（按未审核处理，安全侧）。
+
