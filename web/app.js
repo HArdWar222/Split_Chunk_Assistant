@@ -45,6 +45,8 @@
     tree: document.getElementById("tree"),
     search: document.getElementById("search"),
     sidebar: document.getElementById("sidebar"),
+    btnSidebar: document.getElementById("btn-sidebar"),
+    resizer: document.getElementById("resizer"),
     btnUpload: document.getElementById("btn-upload"),
     fileInput: document.getElementById("file-input"),
     dropHint: document.getElementById("drop-hint"),
@@ -3926,6 +3928,113 @@
     });
   }
 
+  // ---------- 布局：左栏折叠 + 切片栏宽度拖动 ----------
+  var LAYOUT_KEY = "sca.layout";
+  var layoutPrefs = (function () {
+    try {
+      return JSON.parse(window.localStorage.getItem(LAYOUT_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  })();
+
+  function saveLayoutPrefs() {
+    try {
+      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layoutPrefs));
+    } catch (e) {
+      /* 隐私模式下忽略 */
+    }
+  }
+
+  function currentChunksWidth() {
+    var pane = document.querySelector(".chunks-pane");
+    return pane ? Math.round(pane.getBoundingClientRect().width) : 0;
+  }
+
+  function clampChunksWidth(px) {
+    var layout = document.querySelector(".layout");
+    var sidebar = document.querySelector(".sidebar");
+    var total = (layout ? layout.getBoundingClientRect().width : 0) || window.innerWidth;
+    var sidebarW = (sidebar && !layout.classList.contains("sidebar-collapsed"))
+      ? sidebar.getBoundingClientRect().width : 0;
+    var maxW = Math.max(300, Math.min(900, total - sidebarW - 360));
+    return Math.round(Math.max(300, Math.min(maxW, px)));
+  }
+
+  function setChunksWidth(px) {
+    var layout = document.querySelector(".layout");
+    if (!layout) return 0;
+    var w = clampChunksWidth(px);
+    layout.style.setProperty("--chunks-w", w + "px");
+    return w;
+  }
+
+  function applyLayoutPrefs() {
+    var layout = document.querySelector(".layout");
+    if (layout) {
+      layout.classList.toggle("sidebar-collapsed", !!layoutPrefs.sidebarCollapsed);
+      if (layoutPrefs.chunksWidth) {
+        layout.style.setProperty("--chunks-w", clampChunksWidth(layoutPrefs.chunksWidth) + "px");
+      } else {
+        layout.style.removeProperty("--chunks-w");
+      }
+    }
+    if (el.btnSidebar) {
+      el.btnSidebar.setAttribute("aria-pressed", layoutPrefs.sidebarCollapsed ? "true" : "false");
+      el.btnSidebar.title = layoutPrefs.sidebarCollapsed
+        ? "展开文件栏（Ctrl+B）" : "收起文件栏（Ctrl+B）";
+    }
+  }
+
+  function toggleSidebar() {
+    layoutPrefs.sidebarCollapsed = !layoutPrefs.sidebarCollapsed;
+    saveLayoutPrefs();
+    applyLayoutPrefs();
+  }
+
+  function resetChunksWidth() {
+    delete layoutPrefs.chunksWidth;
+    saveLayoutPrefs();
+    applyLayoutPrefs();
+  }
+
+  function bindLayout() {
+    applyLayoutPrefs();
+    if (el.btnSidebar) {
+      el.btnSidebar.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        toggleSidebar();
+      });
+    }
+    var resizer = el.resizer;
+    if (!resizer) return;
+    resizer.addEventListener("mousedown", function (ev) {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      var startX = ev.clientX;
+      var startW = currentChunksWidth();
+      document.body.classList.add("resizing");
+      resizer.classList.add("dragging");
+      function onMove(mv) {
+        setChunksWidth(startW - (mv.clientX - startX));
+      }
+      function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("resizing");
+        resizer.classList.remove("dragging");
+        layoutPrefs.chunksWidth = currentChunksWidth();
+        saveLayoutPrefs();
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    resizer.addEventListener("dblclick", function (ev) {
+      ev.preventDefault();
+      resetChunksWidth();
+    });
+  }
+
   // ---------- 其他 ----------
   function applyLanesVisibility(on) {
     document.body.classList.toggle("no-lanes", !on);
@@ -4039,6 +4148,11 @@
         el.search.focus();
         return;
       }
+      if (mod && key === "b") {
+        ev.preventDefault();
+        toggleSidebar();
+        return;
+      }
       if (mod && key === "s") {
         ev.preventDefault();
         if (state.doc && state.doc.dirty) saveDraft();
@@ -4106,6 +4220,7 @@
   }
 
   bindEvents();
+  bindLayout();
   initHealth();
   loadFiles();
   pollWatch();

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.36-p3j">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.37-p3k">
 </head>
 <body>
   <header class="topbar">
@@ -13,6 +13,7 @@
       <h1>SplitChunkAssistant</h1>
       <span class="phase" id="phase">P1</span>
     </div>
+    <button id="btn-sidebar" class="btn btn-icon" type="button" title="收起文件栏（Ctrl+B）" aria-label="收起或展开文件栏" aria-pressed="false">☰</button>
     <div class="status" id="status">加载中…</div>
     <div class="edit-tools">
       <span class="draft-badge" id="draft-badge" hidden></span>
@@ -68,6 +69,7 @@
     </section>
 
     <section class="chunks-pane" aria-label="切片">
+      <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" title="拖动调整切片栏宽度；双击恢复默认"></div>
       <header class="pane-head">
         <div class="pane-title">切片 <span class="count" id="chunk-count"></span></div>
         <div class="pane-meta" id="chunk-meta"></div>
@@ -227,6 +229,6 @@
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.36-p3j" defer></script>
+  <script src="/static/app.js?v=0.3.37-p3k" defer></script>
 </body>
 </html>
