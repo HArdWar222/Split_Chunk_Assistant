@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import unittest
 
+from chunk_studio import ops
 from chunk_studio.ops import (
     OpError,
     OpNotFound,
@@ -552,6 +553,27 @@ class ExtendTest(unittest.TestCase):
         self.assertEqual(diff["removed"], 1)
         self.assertEqual(diff["added"], 0)
         self.assertEqual(diff["modified"], 1)
+
+
+class OrderTest(unittest.TestCase):
+    def test_sort_by_span_puts_unsorted_chunks_in_document_order(self):
+        chunks = [
+            {"id": "a-0001", "span": [10, 12]},
+            {"id": "a-0002", "span": None},
+            {"id": "a-0003", "span": [3, 5]},
+            {"id": "a-0004", "span": [3, 4]},
+        ]
+        out = ops.sort_by_span(chunks)
+        self.assertEqual([c["id"] for c in out], ["a-0004", "a-0003", "a-0001", "a-0002"])
+
+    def test_normalize_chunks_renumbers_by_position(self):
+        chunks = [
+            {"id": "a-0009", "span": [10, 12], "chunk": "x"},
+            {"id": "a-0007", "span": [3, 5], "chunk": "y"},
+        ]
+        out = ops.normalize_chunks(chunks, "a")
+        self.assertEqual([c["id"] for c in out], ["a-0001", "a-0002"])
+        self.assertEqual([c["span"] for c in out], [[3, 5], [10, 12]])
 
 
 class ApplyAndDiffTest(unittest.TestCase):

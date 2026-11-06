@@ -241,6 +241,33 @@ def _renumber(chunks: list[dict], law_name: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def sort_by_span(chunks: list[dict]) -> list[dict]:
+    """按原文行区间排序（稳定）；没有 span 的手工块排在最后，保持相对顺序。"""
+    indexed = list(enumerate(chunks or []))
+
+    def key(pair):
+        index, chunk = pair
+        span = chunk.get("span")
+        if isinstance(span, (list, tuple)) and len(span) == 2:
+            try:
+                return (0, int(span[0]), int(span[1]), index)
+            except (TypeError, ValueError):
+                pass
+        return (1, 0, 0, index)
+
+    return [chunk for _, chunk in sorted(indexed, key=key)]
+
+
+def normalize_chunks(chunks: list[dict], law_name: str) -> list[dict]:
+    """整理成「原文顺序 + id 序号按位置」的规范形态。
+
+    编辑操作可能把新块插到末尾（或插到不相邻的位置），导致列表顺序与原文
+    顺序不一致；这里统一排序并按位置重排 id，保证 id 序号始终等于原文位置。
+    重排是确定性的，命令重放/撤销时每一步都执行同样的整理，因此 id 一致。
+    """
+    return _renumber(sort_by_span(chunks), law_name)
+
+
 def _split(chunks: list[dict], op: dict, law_name: str, reserved=None, source_lines=None) -> list[dict]:
     index = find_index(chunks, op.get("id"))
     original = chunks[index]
@@ -652,6 +679,7 @@ def apply_ops(
     law_name: str,
     source_lines: list[str] | None = None,
     materialize: Callable[[list[dict]], list[dict]] | None = None,
+    normalize: Callable[[list[dict]], list[dict]] | None = None,
 ) -> list[dict]:
     """按顺序应用一串编辑命令，返回新块列表（输入不变）。
 
@@ -661,10 +689,14 @@ def apply_ops(
     ``materialize`` 是「自动分 part」的物化钩子（由 Studio 传入，避免本模块
     import autopart 造成循环）：每条命令执行后调用一次，把超长块落成真实 part，
     这样后续命令可以直接按 part id 操作、撤销重放也一致。
+    ``normalize`` 是「按原文位置排序 + 按位置重排 id」的规范化钩子：启动和
+    每条命令后都调用一次，保证列表顺序与 id 序号始终跟原文一致。
     """
     result = [_copy(chunk) for chunk in chunks]
     if materialize is not None:
         result = materialize(result)
+    if normalize is not None:
+        result = normalize(result)
     reserved = {str(chunk.get("id")) for chunk in (chunks or [])}
     for position, op in enumerate(ops or []):
         if not isinstance(op, dict):
@@ -681,7 +713,11 @@ def apply_ops(
             raise OpError(f"第 {position + 1} 条命令（{kind}）失败：{exc}") from None
         if materialize is not None:
             result = materialize(result)
+        if normalize is not None:
+            result = normalize(result)
         reserved |= {str(chunk.get("id")) for chunk in result}
+    if normalize is not None:
+        result = normalize(result)
     return result
 
 

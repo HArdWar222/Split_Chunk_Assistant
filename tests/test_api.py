@@ -251,9 +251,16 @@ class AppTest(unittest.TestCase):
         status, data = self.apply_op({"op": "add", "text": "选中新增块", "span": [3, 4]})
         self.assertEqual(status, 200)
         self.assertEqual(len(data["chunks"]), 3)
-        new = data["chunks"][-1]
+        new = next(c for c in data["chunks"] if c["chunk"] == "选中新增块")
         self.assertEqual(new["span"], [3, 4])
         self.assertTrue(new["manual"])
+        # 列表顺序必须按原文行区间排序，id 序号与位置一致
+        starts = [c["span"][0] for c in data["chunks"] if c.get("span")]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(
+            [c["id"] for c in data["chunks"]],
+            ["测试法-0001", "测试法-0002", "测试法-0003"],
+        )
         self.assertEqual(data["diff"]["added"], 1)
 
     def test_op_add_bad_span(self):

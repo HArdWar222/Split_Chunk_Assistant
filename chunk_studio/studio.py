@@ -22,7 +22,7 @@ from . import drafts
 from . import status as review
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, ManifestError
-from .ops import OpError, apply_ops, chunk_diff
+from .ops import OpError, apply_ops, chunk_diff, normalize_chunks
 from .source import (
     display_text,
     line_kind,
@@ -524,12 +524,12 @@ class Studio:
     def _materialized_base(self, base: dict, materializer) -> list[dict]:
         """把基线块物化一次并缓存（diff 的基准要与页面看到的一致）。"""
         if materializer is None:
-            return base["chunks"]
+            return normalize_chunks(base["chunks"], base["law_name"])
         cache = base.setdefault("_materials", {})
         token = (self.cfg.max_chars, self.cfg.min_part_chars)
         cached = cache.get(token)
         if cached is None:
-            cached = materializer(base["chunks"])
+            cached = normalize_chunks(materializer(base["chunks"]), base["law_name"])
             cache[token] = cached
         return cached
 
@@ -544,6 +544,7 @@ class Studio:
             chunks = [dict(chunk) for chunk in draft["chunks"]]
         else:
             chunks = base["chunks"]
+        chunks = normalize_chunks(chunks, base["law_name"])
         if materializer is not None:
             chunks = materializer(chunks)
         if ops:
@@ -553,7 +554,9 @@ class Studio:
                 law_name=base["law_name"],
                 source_lines=raw_lines,
                 materialize=materializer,
+                normalize=lambda items: normalize_chunks(items, base["law_name"]),
             )
+        chunks = normalize_chunks(chunks, base["law_name"])
         payload = dict(base)
         payload.pop("_raw_lines", None)
         payload.pop("_materials", None)
@@ -635,6 +638,7 @@ class Studio:
             start = [dict(chunk) for chunk in draft["chunks"]]
         else:
             start = base["chunks"]
+        start = normalize_chunks(start, base["law_name"])
         if materializer is not None:
             start = materializer(start)
         candidate = list(self._ops.get(key) or []) + [op]
@@ -644,6 +648,7 @@ class Studio:
             law_name=base["law_name"],
             source_lines=raw_lines,
             materialize=materializer,
+            normalize=lambda items: normalize_chunks(items, base["law_name"]),
         )  # 只做校验
         self._ops[key] = candidate
         self._redo[key] = []
