@@ -509,5 +509,106 @@ class UploadTest(unittest.TestCase):
         self.assertIn("UTF-8", data["errors"][0]["error"])
 
 
+class ReviewApiTest(unittest.TestCase):
+    """文件级审核状态：/api/files 与 op / 草稿 / 提交 的流转（D22）。"""
+
+    KEY = "data/测试法"
+
+    def setUp(self):
+        self._tmp = temp_dir()
+        self.base = self._tmp
+        self.data_root = make_two_file_data_dir(self.base)
+        cfg = Config(data_root=str(self.data_root), port=8790)
+        self.studio = Studio(cfg=cfg, config_path=self.base / "config.json")
+        self.app = App(self.studio)
+
+    def tearDown(self):
+        remove(self._tmp)
+
+    def get(self, path: str):
+        return self.app.handle("GET", path)
+
+    def post(self, path: str, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return self.app.handle("POST", path, body)
+
+    def body(self, triple):
+        status, ctype, raw = triple
+        self.assertIn("json", ctype)
+        return status, json.loads(raw.decode("utf-8"))
+
+    def file_review(self, key: str = KEY) -> dict:
+        status, data = self.body(self.get("/api/files"))
+        self.assertEqual(status, 200)
+        for group in data["groups"]:
+            for item in group["files"]:
+                if item["key"] == key:
+                    return item
+        self.fail("文件不在清单里：" + key)
+
+    def status_doc(self):
+        path = self.data_root / "status" / "测试法.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text("utf-8"))
+
+    def op(self, payload: dict):
+        return self.body(self.post("/api/op", {"key": self.KEY, "op": payload}))
+
+    def test_default_none(self):
+        item = self.file_review()
+        self.assertEqual(item["review_state"], "none")
+        self.assertEqual(item["review_label"], "未审核")
+        self.assertIsNone(self.status_doc())
+
+    def test_op_marks_in_review(self):
+        status, data = self.op({"op": "drop", "id": "测试法-0002"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["review"]["state"], "in_review")
+        self.assertEqual(data["review"]["label"], "审核中")
+        saved = self.status_doc()
+        self.assertEqual(saved["state"], "in_review")
+        self.assertEqual(self.file_review()["review_state"], "in_review")
+
+    def test_save_and_commit_marks_reviewed(self):
+        self.op({"op": "drop", "id": "测试法-0002"})
+        status, _ = self.body(self.post("/api/draft/save", {"key": self.KEY}))
+        self.assertEqual(status, 200)
+        status, data = self.body(self.post("/api/draft/commit", {"key": self.KEY}))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["review"]["state"], "reviewed")
+        saved = self.status_doc()
+        self.assertEqual(saved["state"], "reviewed")
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+
+    def test_discard_returns_to_reviewed(self):
+        self.op({"op": "drop", "id": "测试法-0002"})
+        self.post("/api/draft/save", {"key": self.KEY})
+        self.post("/api/draft/commit", {"key": self.KEY})
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+        self.op({"op": "drop", "id": "测试法-0001"})
+        self.assertEqual(self.file_review()["review_state"], "in_review")
+        self.post("/api/draft/discard", {"key": self.KEY})
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+
+    def test_discard_without_prior_returns_none(self):
+        self.op({"op": "drop", "id": "测试法-0002"})
+        self.assertEqual(self.file_review()["review_state"], "in_review")
+        self.post("/api/draft/discard", {"key": self.KEY})
+        self.assertEqual(self.file_review()["review_state"], "none")
+
+    def test_external_change_resets_to_none(self):
+        self.op({"op": "drop", "id": "测试法-0002"})
+        self.post("/api/draft/save", {"key": self.KEY})
+        self.post("/api/draft/commit", {"key": self.KEY})
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+        chunks = self.data_root / "chunks" / "测试法" / "测试法.chunks.jsonl"
+        row = json.loads([line for line in chunks.read_text("utf-8").splitlines() if line.strip()][0])
+        row["chunk"] = row["chunk"] + "（外部改动）"
+        chunks.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.post("/api/reload", {})
+        self.assertEqual(self.file_review()["review_state"], "none")
+
+
 if __name__ == "__main__":
     unittest.main()

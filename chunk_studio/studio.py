@@ -19,6 +19,7 @@ from .autopart import materialize_chunks
 from .chunker import WatchService, engine_info
 from .config import Config, ConfigError
 from . import drafts
+from . import status as review
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, ManifestError
 from .ops import OpError, apply_ops, chunk_diff
@@ -125,6 +126,40 @@ class Studio:
             rel = ""
         return drafts.stem_for("" if rel == "." else rel, doc_dir.name)
 
+    # -- 审核状态（D22，文件级） -----------------------------------------
+    def _chunks_path(self, key: str) -> Path:
+        return Path(self.bridge_for(key).manifest.get(key).jsonl)
+
+    def _review_for(self, key: str) -> dict:
+        try:
+            path = self._chunks_path(key)
+            state = review.state_for_chunks(self.cfg.data_root, self._stem_for(key), path)
+        except (ManifestError, OSError):
+            return {"state": review.STATE_NONE, "updated_at": 0}
+        state["label"] = review.label(state["state"])
+        return state
+
+    def _mark_in_review(self, key: str) -> None:
+        try:
+            path = self._chunks_path(key)
+            review.mark_in_review(self.cfg.data_root, self._stem_for(key), drafts.sha12(path))
+        except (ManifestError, OSError):
+            pass
+
+    def _mark_reviewed(self, key: str) -> None:
+        try:
+            path = self._chunks_path(key)
+            review.mark_reviewed(self.cfg.data_root, self._stem_for(key), drafts.sha12(path))
+        except (ManifestError, OSError):
+            pass
+
+    def _restore_review_previous(self, key: str) -> None:
+        try:
+            path = self._chunks_path(key)
+            review.restore_previous(self.cfg.data_root, self._stem_for(key), drafts.sha12(path))
+        except (ManifestError, OSError):
+            pass
+
     def _load_drafts(self) -> None:
         """扫描 data/draft，把基线仍然匹配的草稿加载进内存。"""
         self._drafts = {}
@@ -207,6 +242,7 @@ class Studio:
             "chunks": [dict(chunk) for chunk in (previous.get("chunks") or [])],
         }
         self._dirty.discard(key)
+        self._mark_in_review(key)
         return self.doc_payload(key)
 
     def discard_draft(self, key: str) -> dict:
@@ -218,6 +254,7 @@ class Studio:
         self._ops.pop(key, None)
         self._redo.pop(key, None)
         self._dirty.discard(key)
+        self._restore_review_previous(key)
         return self.doc_payload(key)
 
     def commit_draft(self, key: str) -> dict:
@@ -236,6 +273,7 @@ class Studio:
             draft["stem"],
         )
         self.reload()
+        self._mark_reviewed(key)
         doc = self.doc_payload(key)
         doc["committed"] = result
         return doc
@@ -289,6 +327,10 @@ class Studio:
                 draft = self.draft_payload(item.get("key") or "")
                 item["draft"] = bool(draft.get("exists"))
                 item["draft_stale"] = bool(draft.get("stale"))
+                review_state = self._review_for(item.get("key") or "")
+                item["review_state"] = review_state.get("state")
+                item["review_label"] = review_state.get("label")
+                item["review_updated_at"] = review_state.get("updated_at")
         payload.update(
             {
                 "ok": True,
@@ -521,6 +563,7 @@ class Studio:
         payload["edited"] = False  # P3 覆盖层
         payload["dirty"] = key in self._dirty
         payload["draft"] = self.draft_payload(key)
+        payload["review"] = self._review_for(key)
         payload["diff"] = chunk_diff(self._materialized_base(base, materializer), chunks)
         payload["edits"] = {
             "n_ops": len(ops),
@@ -605,6 +648,7 @@ class Studio:
         self._ops[key] = candidate
         self._redo[key] = []
         self._dirty.add(key)
+        self._mark_in_review(key)
         return self.doc_payload(key)
 
     def undo_op(self, key: str) -> dict:
@@ -617,6 +661,7 @@ class Studio:
         self._ops[key] = ops
         if not ops:
             self._dirty.discard(key)
+            self._restore_review_previous(key)
         return self.doc_payload(key)
 
     def redo_op(self, key: str) -> dict:
@@ -628,6 +673,7 @@ class Studio:
         self._redo[key] = redo
         self._ops.setdefault(key, []).append(op)
         self._dirty.add(key)
+        self._mark_in_review(key)
         return self.doc_payload(key)
 
     def reset_edits(self, key: str) -> dict:
@@ -636,4 +682,5 @@ class Studio:
         self._ops.pop(key, None)
         self._redo.pop(key, None)
         self._dirty.discard(key)
+        self._restore_review_previous(key)
         return self.doc_payload(key)
