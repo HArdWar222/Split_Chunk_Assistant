@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.40-p3n">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.42-p3p">
 </head>
 <body>
   <header class="topbar">
@@ -39,11 +39,19 @@
       <div class="search-row">
         <input id="search" type="search" placeholder="搜索法规名 / 分组…" autocomplete="off" aria-label="搜索法规">
         <button id="btn-upload" class="btn btn-upload" type="button" title="批量导入原文件（.md / .markdown / .txt，写入 data/source）">⬆ 添加文件</button>
+        <button id="btn-delete-mode" class="btn btn-upload" type="button" title="删除文件（可多选）" aria-pressed="false">🗑</button>
         <input id="file-input" type="file" multiple accept=".md,.markdown,.txt" hidden>
       </div>
       <div class="drop-hint" id="drop-hint" hidden>松开导入到 data/source</div>
       <div class="stats" id="stats"></div>
       <nav class="tree" id="tree" aria-label="文件列表"></nav>
+      <div class="delete-bar" id="delete-bar" hidden>
+        <span id="delete-bar-text">已选 0 个文件</span>
+        <div class="delete-bar-actions">
+          <button id="btn-delete-cancel" type="button" class="btn">取消</button>
+          <button id="btn-delete-confirm" type="button" class="btn btn-danger" disabled>删除所选</button>
+        </div>
+      </div>
     </aside>
 
     <section class="source-pane" aria-label="原文">
@@ -224,12 +232,23 @@
     </form>
   </dialog>
 
+  <dialog id="confirm-dialog" class="dialog op-dialog">
+    <form method="dialog">
+      <h2 id="confirm-title">确认删除？</h2>
+      <p class="hint" id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button id="btn-confirm-cancel" type="button" class="btn">取消</button>
+        <button id="btn-confirm-ok" type="button" class="btn btn-danger">确认删除</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <div id="split-caret" class="split-caret" hidden aria-hidden="true"></div>
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.40-p3n" defer></script>
+  <script src="/static/app.js?v=0.3.42-p3p" defer></script>
 </body>
 </html>
 

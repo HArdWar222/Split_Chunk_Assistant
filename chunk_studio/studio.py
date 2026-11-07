@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 
@@ -314,6 +315,88 @@ class Studio:
 
     def reload(self) -> None:
         self._init_bridge()
+
+    # -- 文件删除（P3，物理删除） ---------------------------------------
+    def delete_files(self, keys: list[str]) -> dict:
+        """物理删除选中文件：源文件 + 切块目录 + 草稿 + 备份 + 审核状态。
+
+        key 只能来自文件清单，路径一律经 manifest 解析（不接受 ``..`` 等片段）；
+        正在切块的文件会拒绝并返回 failed。
+        """
+        if not self.available:
+            raise ManifestError(self.error or "本地数据目录不可用")
+        ordered: list[str] = []
+        for raw in keys or []:
+            key = str(raw or "").strip()
+            if key and key not in ordered:
+                ordered.append(key)
+        if not ordered:
+            raise ManifestError("没有选中要删除的文件")
+
+        data_root = Path(self.cfg.data_root)
+        draft_dir = data_root / "draft"
+        backup_dir = data_root / "backup"
+        current = None
+        try:
+            cur = self.watch.snapshot().get("current")
+            if isinstance(cur, dict):
+                current = cur.get("subject") or cur.get("key")
+            elif isinstance(cur, str):
+                current = cur
+        except Exception:  # watch 状态只是提示，取不到不阻塞删除
+            current = None
+
+        deleted: list[str] = []
+        failed: list[dict] = []
+        for key in ordered:
+            if current and key == current:
+                failed.append({"key": key, "error": "该文件正在切块，稍后再删"})
+                continue
+            try:
+                bridge = self.bridge_for(key)
+                entry = bridge.manifest.get(key)
+            except (ManifestError, OSError) as exc:
+                failed.append({"key": key, "error": str(exc)})
+                continue
+
+            errors: list[str] = []
+            doc_dir = Path(entry.jsonl).parent
+            try:
+                shutil.rmtree(doc_dir)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                errors.append("切块目录：" + str(exc))
+
+            stem = self._stem_for(key)
+            targets = [Path(entry.source_path)] if entry.source_path else []
+            targets += drafts.draft_files(draft_dir, stem)
+            targets += sorted(backup_dir.glob(stem + ".*.jsonl"))
+            targets.append(review.status_path(data_root, stem))
+            for path in targets:
+                try:
+                    path.unlink(missing_ok=True)
+                except IsADirectoryError:
+                    try:
+                        shutil.rmtree(path)
+                    except OSError as exc:
+                        errors.append(path.name + "：" + str(exc))
+                except OSError as exc:
+                    errors.append(path.name + "：" + str(exc))
+
+            if errors:
+                failed.append({"key": key, "error": "；".join(errors)})
+            else:
+                deleted.append(key)
+
+        if deleted:
+            self.reload()
+        return {
+            "ok": not failed,
+            "deleted": deleted,
+            "failed": failed,
+            "n_deleted": len(deleted),
+        }
 
     # -- 载荷 -----------------------------------------------------------
     def files_payload(self) -> dict:

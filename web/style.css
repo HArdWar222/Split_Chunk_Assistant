@@ -988,3 +988,27 @@ body.row-picking { user-select: none; }
 .review-dot.review-none { background: #ef4444; }
 .review-dot.review-in_review { background: #f59e0b; }
 .review-dot.review-reviewed { background: #16a34a; }
+
+/* ---------- 文件删除模式（P3） ---------- */
+#btn-delete-mode.active { background: #fee2e2; border-color: #ef4444; color: #991b1b; }
+.sidebar.delete-mode .review-dot { display: none; }
+.delete-check { position: absolute; top: 9px; right: 9px; width: 16px; height: 16px;
+  border-radius: 50%; border: 2px solid #94a3b8; background: #fff; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1; }
+.delete-check.checked { background: #2563eb; border-color: #2563eb; }
+.file.selected-for-delete { background: #eff6ff; border-color: #bfdbfe; }
+.delete-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-direction: column;
+  gap: 6px; padding: 8px 10px; background: #fff; border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -6px 12px rgba(15, 23, 42, .06); font-size: 12px; color: #334155; }
+.delete-bar-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
+.delete-bar .btn-danger:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 拖动分栏期间冻结两栏交互，减少重排/悬停计算造成的抖动 */
+body.resizing #source, body.resizing #chunks, body.resizing .sidebar { pointer-events: none; }
+body.resizing { user-select: none; }
+.resizer { touch-action: none; }
+
+#confirm-text { white-space: pre-line; }

@@ -516,6 +516,50 @@ class UploadTest(unittest.TestCase):
         self.assertIn("UTF-8", data["errors"][0]["error"])
 
 
+class DeleteApiTest(unittest.TestCase):
+    """POST /api/files/delete：物理删除文件及其产物、草稿、备份、审核状态。"""
+
+    KEY = "data/测试法"
+
+    def setUp(self):
+        self._tmp = temp_dir()
+        self.data_root = make_two_file_data_dir(self._tmp)
+        cfg = Config(data_root=str(self.data_root), port=8790)
+        self.studio = Studio(cfg=cfg, config_path=self._tmp / "config.json")
+        self.app = App(self.studio)
+
+    def tearDown(self):
+        remove(self._tmp)
+
+    def post(self, path: str, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return self.app.handle("POST", path, body)
+
+    def body(self, triple):
+        status, ctype, raw = triple
+        self.assertIn("json", ctype)
+        return status, json.loads(raw.decode("utf-8"))
+
+    def test_delete_files_and_reloads(self):
+        status, data = self.body(self.post("/api/files/delete", {"keys": [self.KEY]}))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["deleted"], [self.KEY])
+        self.assertEqual(data["files"]["totals"]["n_files"], 1)
+        self.assertFalse((self.data_root / "chunks" / "测试法").exists())
+
+    def test_delete_unknown_key_returns_409(self):
+        status, data = self.body(self.post("/api/files/delete", {"keys": ["data/不存在"]}))
+        self.assertEqual(status, 409)
+        self.assertFalse(data["ok"])
+        self.assertIn("没有这个文件", data["failed"][0]["error"])
+
+    def test_delete_requires_keys(self):
+        status, data = self.body(self.post("/api/files/delete", {"keys": []}))
+        self.assertEqual(status, 400)
+        self.assertIn("keys", data["error"])
+
+
 class ReviewApiTest(unittest.TestCase):
     """文件级审核状态：/api/files 与 op / 草稿 / 提交 的流转（D22）。"""
 

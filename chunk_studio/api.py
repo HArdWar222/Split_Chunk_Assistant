@@ -199,6 +199,21 @@ class App:
                 }
             )
 
+        if method == "POST" and path == "/api/files/delete":
+            # 物理删除选中的文件（源文件 + 切块目录 + 草稿 + 备份 + 审核状态）
+            data = self._read_json(body)
+            keys = data.get("keys")
+            if not isinstance(keys, list) or not keys:
+                raise ApiError(400, "keys 不能为空")
+            try:
+                result = self.studio.delete_files([str(k) for k in keys])
+            except ManifestError as exc:
+                raise ApiError(400, str(exc)) from exc
+            status = 200 if result.get("ok") else 409
+            if result.get("n_deleted"):
+                result["files"] = self.studio.files_payload()
+            return _json(result, status)
+
         if method == "GET" and path == "/api/watch":
             return _json(self.studio.watch.snapshot())
 

@@ -35,6 +35,10 @@
     suppressNextClick: false, // 拖选/Shift 选行后吞掉紧随其后的 click
     rowPickClick: false,      // 本次 mousedown 是否是「单击」（未按 Shift）
     multiSel: new Set(),      // Ctrl/⌘ 多选中的 chunk id 集合
+    deleteMode: false,        // 左栏文件删除模式
+    deleteSel: new Set(),     // 删除模式中勾选的文件 key
+    deleteAnchor: "",         // Shift 连选锚点 key
+    viewState: {},             // 每个文件的滚动/选中位置（切回来不回到目录）
     programmaticScroll: 0, // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
     draftTimer: 0 // 草稿自动保存的防抖定时器
   };
@@ -50,6 +54,16 @@
     btnUpload: document.getElementById("btn-upload"),
     fileInput: document.getElementById("file-input"),
     dropHint: document.getElementById("drop-hint"),
+    btnDeleteMode: document.getElementById("btn-delete-mode"),
+    deleteBar: document.getElementById("delete-bar"),
+    deleteBarText: document.getElementById("delete-bar-text"),
+    btnDeleteCancel: document.getElementById("btn-delete-cancel"),
+    btnDeleteConfirm: document.getElementById("btn-delete-confirm"),
+    confirmDialog: document.getElementById("confirm-dialog"),
+    confirmTitle: document.getElementById("confirm-title"),
+    confirmText: document.getElementById("confirm-text"),
+    btnConfirmCancel: document.getElementById("btn-confirm-cancel"),
+    btnConfirmOk: document.getElementById("btn-confirm-ok"),
     phase: document.getElementById("phase"),
     sourceTitle: document.getElementById("source-title"),
     sourceMeta: document.getElementById("source-meta"),
@@ -763,6 +777,17 @@
         el.fileInput.value = "";
       });
     }
+    if (el.btnDeleteMode) {
+      el.btnDeleteMode.addEventListener("click", function () { setDeleteMode(!state.deleteMode); });
+    }
+    if (el.btnDeleteCancel) {
+      el.btnDeleteCancel.addEventListener("click", function () { setDeleteMode(false); });
+    }
+    if (el.btnDeleteConfirm) {
+      el.btnDeleteConfirm.addEventListener("click", function () {
+        confirmDeleteFiles(Array.from(state.deleteSel));
+      });
+    }
     if (!el.sidebar) return;
     var dragDepth = 0;
     function hasFiles(ev) {
@@ -850,6 +875,169 @@
       (group || "").toLowerCase().indexOf(q) >= 0;
   }
 
+  // ---------- 文件删除（P3）：批量模式 + 单文件右键 ----------
+  function updateDeleteBar() {
+    if (!el.deleteBar) return;
+    var n = state.deleteSel.size;
+    el.deleteBar.hidden = !state.deleteMode;
+    if (el.deleteBarText) el.deleteBarText.textContent = "已选 " + n + " 个文件";
+    if (el.btnDeleteConfirm) el.btnDeleteConfirm.disabled = n === 0;
+  }
+
+  function setDeleteMode(on) {
+    state.deleteMode = !!on;
+    state.deleteSel = new Set();
+    state.deleteAnchor = "";
+    if (el.sidebar) el.sidebar.classList.toggle("delete-mode", state.deleteMode);
+    if (el.btnDeleteMode) {
+      el.btnDeleteMode.classList.toggle("active", state.deleteMode);
+      el.btnDeleteMode.setAttribute("aria-pressed", state.deleteMode ? "true" : "false");
+    }
+    hideCtxMenu();
+    updateDeleteBar();
+    renderTree();
+  }
+
+  function deleteOrder() {
+    var out = [];
+    var groups = (state.data && state.data.groups) || [];
+    groups.forEach(function (group) {
+      (group.files || []).forEach(function (file) { out.push(file); });
+    });
+    return out;
+  }
+
+  function toggleDeleteKey(key, ev) {
+    var files = deleteOrder();
+    var anchor = state.deleteAnchor;
+    if (ev && ev.shiftKey && anchor) {
+      var a = -1, b = -1;
+      files.forEach(function (f, i) {
+        if (f.key === anchor) a = i;
+        if (f.key === key) b = i;
+      });
+      if (a >= 0 && b >= 0) {
+        for (var i = Math.min(a, b); i <= Math.max(a, b); i++) state.deleteSel.add(files[i].key);
+        updateDeleteBar();
+        renderTree();
+        return;
+      }
+    }
+    if (state.deleteSel.has(key)) state.deleteSel.delete(key);
+    else state.deleteSel.add(key);
+    state.deleteAnchor = key;
+    updateDeleteBar();
+    renderTree();
+  }
+
+  function openFileMenu(ev, file) {
+    ev.preventDefault();
+    hideCtxMenu();
+    el.ctxMenu.innerHTML = "";
+    el.ctxMenu.appendChild(ctxItem("🗑 删除此文件…", file.law_name, function () { confirmDeleteFiles([file.key]); }));
+    el.ctxMenu.appendChild(ctxItem("📄 打开此文件", file.law_name, function () { selectFile(file); }));
+    placeCtxMenu(ev);
+  }
+
+  function askConfirm(title, text, okLabel) {
+    return new Promise(function (resolve) {
+      if (!el.confirmDialog) { resolve(false); return; }
+      el.confirmTitle.textContent = title;
+      el.confirmText.textContent = text;
+      el.btnConfirmOk.textContent = okLabel || "确认删除";
+      var done = false;
+      function finish(value) {
+        if (done) return;
+        done = true;
+        el.btnConfirmOk.removeEventListener("click", onOk);
+        el.btnConfirmCancel.removeEventListener("click", onCancel);
+        el.confirmDialog.removeEventListener("cancel", onCancel);
+        if (el.confirmDialog.open) el.confirmDialog.close();
+        resolve(value);
+      }
+      function onOk() { finish(true); }
+      function onCancel(ev) { if (ev && ev.preventDefault) ev.preventDefault(); finish(false); }
+      el.btnConfirmOk.addEventListener("click", onOk);
+      el.btnConfirmCancel.addEventListener("click", onCancel);
+      el.confirmDialog.addEventListener("cancel", onCancel);
+      el.confirmDialog.showModal();
+    });
+  }
+
+  function confirmDeleteFiles(keys) {
+    var wanted = {};
+    keys.forEach(function (k) { wanted[k] = 1; });
+    var names = [];
+    var chunks = 0;
+    var drafts = 0;
+    deleteOrder().forEach(function (file) {
+      if (!wanted[file.key]) return;
+      names.push(file.law_name);
+      chunks += file.n_chunks || 0;
+      if (file.draft) drafts += 1;
+      delete wanted[file.key];
+    });
+    if (!names.length) return;
+    var text = "将物理删除 " + names.length + " 个文件（共 " + fmtInt(chunks) + " 块）：\n" +
+      names.join("、") + "\n" + (drafts ? "其中 " + drafts + " 个文件有未提交草稿，会一并删除。\n" : "") +
+      "源文件、切块产物、草稿、备份与审核状态都会删除，不可恢复。";
+    askConfirm("确认删除文件？", text, "确认删除").then(function (ok) {
+      if (ok) deleteFiles(keys);
+    });
+  }
+
+  function afterDelete(deleted, failed) {
+    var deletedSet = {};
+    (deleted || []).forEach(function (key) { deletedSet[key] = 1; });
+    if (state.selected && deletedSet[state.selected.key]) clearDocView();
+    state.deleteSel = new Set();
+    setDeleteMode(false);
+    renderStats(state.data);
+    if (failed && failed.length) {
+      showToast("已删除 " + deleted.length + " 个，失败 " + failed.length + " 个：" + failed[0].error, "err");
+    } else {
+      showToast("已删除 " + deleted.length + " 个文件", "ok");
+    }
+  }
+
+  function deleteFiles(keys) {
+    postJSON("/api/files/delete", { keys: keys }).then(function (res) {
+      if (res.files) state.data = res.files;
+      afterDelete(res.deleted || [], res.failed || []);
+    }).catch(function (err) {
+      var payload = err.payload;
+      if (payload && (payload.deleted || []).length) {
+        if (payload.files) state.data = payload.files;
+        afterDelete(payload.deleted, payload.failed || []);
+        return;
+      }
+      showToast("删除失败：" + err.message, "err");
+    });
+  }
+
+  function clearDocView() {
+    state.doc = null;
+    state.docKey = null;
+    state.selected = null;
+    state.activeChunk = null;
+    state.hoverChunk = null;
+    state.tables = null;
+    hideCtxMenu();
+    hideSplitCaret();
+    hideRowPick();
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    el.source.innerHTML = "<div class='empty'><h2>原文 ↔ 切片</h2><p>点击左侧任意一份文件，这里会显示 Markdown 原文行；右栏是自动切好的切片。</p></div>";
+    el.chunks.innerHTML = "<div class='empty'><p>尚未选择文件。</p></div>";
+    el.sourceTitle.textContent = "原文";
+    el.sourceMeta.textContent = "选择左侧文件开始";
+    el.chunkCount.textContent = "";
+    el.chunkMeta.textContent = "";
+    syncEditUI(null);
+    setStatus("文件已删除", "ok");
+  }
+
   function renderTree() {
     el.tree.innerHTML = "";
     var data = state.data;
@@ -883,10 +1071,18 @@
         var badges = [];
         var reviewState = file.review_state || "none";
         var reviewLabel = file.review_label || "未审核";
-        badges.push(
-          "<span class='review-dot review-" + escapeHtml(reviewState) + "' title='审核状态：" +
-          escapeHtml(reviewLabel) + "'></span>"
-        );
+        if (state.deleteMode) {
+          var checked = state.deleteSel.has(file.key);
+          badges.push(
+            "<span class='delete-check" + (checked ? " checked" : "") +
+            "' title='选择要删除的文件'>" + (checked ? "✓" : "") + "</span>"
+          );
+        } else {
+          badges.push(
+            "<span class='review-dot review-" + escapeHtml(reviewState) + "' title='审核状态：" +
+            escapeHtml(reviewLabel) + "'></span>"
+          );
+        }
         if (file.local) {
           badges.push("<span class='badge badge-local'>本地</span>");
         } else if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
@@ -898,7 +1094,13 @@
           "<span class='name'>" + escapeHtml(file.law_name) + "</span>" +
           "<span class='meta'><span>切块 " + fmtInt(file.n_chunks) + "</span>" +
           badges.join("") + "</span>";
-        btn.addEventListener("click", function () { selectFile(file); });
+        if (state.deleteMode) btn.className += " delete-mode";
+        if (state.deleteMode && state.deleteSel.has(file.key)) btn.className += " selected-for-delete";
+        btn.addEventListener("click", function (ev) {
+          if (state.deleteMode) toggleDeleteKey(file.key, ev);
+          else selectFile(file);
+        });
+        btn.addEventListener("contextmenu", function (ev) { openFileMenu(ev, file); });
         section.appendChild(btn);
       });
 
@@ -971,6 +1173,14 @@
     if (state.doc && state.doc.dirty && state.doc.key && state.doc.key !== file.key) {
       flushDraft(state.doc.key);
     }
+    // 记住当前文件读到哪儿、选中了哪块，切回来时恢复（不再每次回到目录）
+    if (state.doc && state.doc.key) {
+      state.viewState[state.doc.key] = {
+        src: el.source.scrollTop,
+        chunks: el.chunks.scrollTop,
+        active: state.activeChunk || "",
+      };
+    }
     hideSplitCaret();
     hideRowPick();
     var seq = (loadDoc._seq = (loadDoc._seq || 0) + 1);
@@ -991,6 +1201,16 @@
       state.hoverChunk = null;
       renderDocument(doc);
       syncEditUI(doc);
+      var saved = state.viewState[doc.key];
+      if (saved) {
+        requestAnimationFrame(function () {
+          if (!state.doc || state.doc.key !== doc.key) return;
+          el.source.scrollTop = saved.src || 0;
+          el.chunks.scrollTop = saved.chunks || 0;
+          var keep = saved.active ? findChunk(saved.active) : null;
+          if (keep) selectChunk(keep, { scrollSource: false, scrollCard: false });
+        });
+      }
       loadTablesFor(doc, seq);
       setStatus("已加载 " + doc.law_name + " · " + fmtInt(doc.stats.n_chunks) + " 块 · 对齐 " +
         fmtInt(doc.stats.n_aligned) + "/" + fmtInt(doc.stats.n_chunks) + " (" +
@@ -4011,17 +4231,38 @@
     resizer.addEventListener("mousedown", function (ev) {
       if (ev.button !== 0) return;
       ev.preventDefault();
+      var layoutEl = document.querySelector(".layout");
       var startX = ev.clientX;
       var startW = currentChunksWidth();
+      var rect = layoutEl ? layoutEl.getBoundingClientRect() : { width: window.innerWidth };
+      var sidebarEl = document.querySelector(".sidebar");
+      var sidebarW = (sidebarEl && !(layoutEl && layoutEl.classList.contains("sidebar-collapsed")))
+        ? sidebarEl.getBoundingClientRect().width : 0;
+      var maxW = Math.max(300, Math.min(900, rect.width - sidebarW - 360));
+      var pendingX = ev.clientX;
+      var raf = 0;
       document.body.classList.add("resizing");
       resizer.classList.add("dragging");
+      function apply() {
+        raf = 0;
+        if (!layoutEl) return;
+        var w = Math.round(startW - (pendingX - startX));
+        w = Math.max(300, Math.min(maxW, w));
+        layoutEl.style.setProperty("--chunks-w", w + "px");
+        // 宽度变化后两栏会重排，光标可能落到 iframe/表格上：保持拖动手型
+        document.body.style.cursor = "col-resize";
+      }
       function onMove(mv) {
-        setChunksWidth(startW - (mv.clientX - startX));
+        pendingX = mv.clientX;
+        if (!raf) raf = requestAnimationFrame(apply);
       }
       function onUp() {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
         document.body.classList.remove("resizing");
+        document.body.style.cursor = "";
         resizer.classList.remove("dragging");
         layoutPrefs.chunksWidth = currentChunksWidth();
         saveLayoutPrefs();
@@ -4133,6 +4374,7 @@
       var mod = ev.ctrlKey || ev.metaKey;
       var key = String(ev.key || "").toLowerCase();
       if (ev.key === "Escape") {
+        if (state.deleteMode) setDeleteMode(false);
         hideCtxMenu();
         hideSplitCaret();
         hideRowPick();
