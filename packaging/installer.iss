@@ -16,7 +16,7 @@
 ; - Bump MyAppVersion for each release.
 
 #define MyAppName "SplitChunkAssistant"
-#define MyAppVersion "0.3.42"
+#define MyAppVersion "0.3.43"
 #define MyAppPublisher "SplitChunkAssistant"
 #define MyAppExeName "SplitChunkAssistant.exe"
 

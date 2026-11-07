@@ -17,6 +17,9 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性优先级最高：避免被后面的 display:flex / inline-flex 覆盖（删除模式浮条等） */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
