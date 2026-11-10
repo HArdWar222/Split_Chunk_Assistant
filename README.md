@@ -237,7 +237,7 @@ data/
 验收 / 自测口径（单测覆盖）：
 
 ```bat
-python -m unittest discover -s tests -t . -v   :: 260 个测试
+python -m unittest discover -s tests -t . -v   :: 269 个测试
 ```
 
 - `/api/files` 以本地 `data/` 为准（示例环境 **10 个文件 / 1 916 块**：山东自由裁量 754、2464 104、2972 185、安全生产法 129，其余为后加入的法规），`mode=dirs`、单组 `data`
