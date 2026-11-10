@@ -93,7 +93,7 @@
 - `law_num` 留空时按前后邻居倒推（`ops.infer_law_num`）：先取**前一块**的条号（「第X条」或标准式数字层级号 `5.4.1`，判断为同一块的续写），前面没有可参照的条号就看**后一块**；参照只认这两种条号，表号 / 附录号 /「（新增）」不作参照，推不到才写 `（新增）`（此时**需人工补**，如 `前言` / `目录` / `第一章`）；
 - `chunk_kind` 默认 `paragraph`（弹层可改成 `front` / `title` / `appendix` 等）；
 - `law_type` / `law_level` / `issuer` / `effective_date` / `source` / `law_invalid` 继承**同文件第一块**（文件级默认值）；
-- `source` 是**文件级人工类别**（`chunk_studio/sources.py`）：左栏右键文件设置后，写 `data/sources.json`（`{"categories": [...类别], "files": {law_name: 类别}}`，类别列表内置四项、可新增自定义项）并把该文件 `chunks.jsonl` 所有行统一改成该类别；有草稿时草稿块同步并按新基线重命名；改类别算一次编辑（审核状态 `in_review`）。重新切块后由 `chunker` 按 `sources.json` 回填，不会丢；`source` 不参与 `chunk_hash`；
+- `source` 是**文件级人工类别**（`chunk_studio/sources.py`）：左栏右键文件设置后，写 `data/sources.json`（`{"categories": [...类别], "files": {law_name: 类别}}`，类别列表内置四项、可新增自定义项）并把该文件 `chunks.jsonl` 所有行统一改成该类别；有草稿时草稿块同步并按新基线重命名；改类别只动 `source`，不改变审核状态（状态文件按新 chunks 指纹续存）。重新切块后由 `chunker` 按 `sources.json` 回填，不会丢；`source` 不参与 `chunk_hash`；
 - `token_len` / `chunk_hash` 按新增正文重算；`part_index=1 / part_total=1`；
 - 视图层：`span` = 选区行区间（1-based 闭区间），`align="manual"`、`manual=true`，`extras={"region":"body"}`（P3 导出时补 `profile/namespace/probe`）；
 - 纯空白选区会被后端拒绝（「新增切片正文不能为空」）。

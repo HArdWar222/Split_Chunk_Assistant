@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from chunk_studio import drafts, sources
+from chunk_studio import drafts, sources, status as review
 from chunk_studio.config import Config
 from chunk_studio.manifest import ManifestError
 from chunk_studio.studio import Studio
@@ -168,6 +168,42 @@ class SetFileSourceTest(unittest.TestCase):
         # 草稿仍可正常提交（基线一致）
         doc = self.studio.commit_draft(KEY)
         self.assertIn("committed", doc)
+
+    # -- 设置 source 不应改变审核状态 -------------------------------------
+    def _review_state(self) -> str:
+        return self.studio._review_for(KEY)["state"]
+
+    def test_set_source_keeps_reviewed_state(self) -> None:
+        review.mark_reviewed(self.data_root, self.stem, drafts.sha12(self.chunks_path))
+        self.assertEqual(self._review_state(), review.STATE_REVIEWED)
+
+        self.studio.set_file_source(KEY, "地方标准")
+
+        self.assertEqual(self._review_state(), review.STATE_REVIEWED)
+        # 指纹要跟着新 chunks 更新，否则下次打开会显示未审核
+        fresh = review.resolve(self.data_root, self.stem, drafts.sha12(self.chunks_path))
+        self.assertEqual(fresh["state"], review.STATE_REVIEWED)
+
+    def test_set_source_keeps_in_review_state_and_prior(self) -> None:
+        review.mark_reviewed(self.data_root, self.stem, drafts.sha12(self.chunks_path))
+        review.mark_in_review(self.data_root, self.stem, drafts.sha12(self.chunks_path))
+        self.assertEqual(self._review_state(), review.STATE_IN_REVIEW)
+
+        self.studio.set_file_source(KEY, "部门规章")
+
+        self.assertEqual(self._review_state(), review.STATE_IN_REVIEW)
+        raw = review.load(self.data_root, self.stem)
+        self.assertEqual(raw["prior"], review.STATE_REVIEWED)
+        # 放弃编辑后仍可回到「已审核」
+        self.studio.discard_draft(KEY)
+        self.assertEqual(self._review_state(), review.STATE_REVIEWED)
+
+    def test_set_source_on_unreviewed_file_stays_unreviewed(self) -> None:
+        self.assertEqual(self._review_state(), review.STATE_NONE)
+
+        self.studio.set_file_source(KEY, "法律")
+
+        self.assertEqual(self._review_state(), review.STATE_NONE)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-; Inno Setup script for SplitChunkAssistant (onedir build).
+﻿; Inno Setup script for SplitChunkAssistant (onedir build).
 ; Prerequisites:
 ;   1) Run packaging\build.ps1 so that dist\SplitChunkAssistant\ exists.
 ;   2) Install Inno Setup 6 (https://jrsoftware.org/isinfo.php).
@@ -16,7 +16,7 @@
 ; - Bump MyAppVersion for each release.
 
 #define MyAppName "SplitChunkAssistant"
-#define MyAppVersion "0.3.45"
+#define MyAppVersion "0.3.46"
 #define MyAppPublisher "SplitChunkAssistant"
 #define MyAppExeName "SplitChunkAssistant.exe"
 
@@ -54,5 +54,6 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
 
 

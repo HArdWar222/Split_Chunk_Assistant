@@ -109,6 +109,31 @@ def mark_reviewed(data_root: Path | str, stem: str, current12: str) -> dict:
     return payload
 
 
+def carry_over(
+    data_root: Path | str,
+    stem: str,
+    current12: str,
+    state: str,
+    prior: str = STATE_NONE,
+) -> dict:
+    """文件内容被「不改变审核语义」的操作重写后，沿用原来的审核状态。
+
+    典型场景：设置 ``source`` 会重写 ``chunks.jsonl``，指纹随之变化；这里把
+    原状态按新指纹重新落盘，避免文件莫名其妙从「已审核」退回「未审核」。
+    """
+    if state not in (STATE_IN_REVIEW, STATE_REVIEWED):
+        clear(data_root, stem)
+        return {"state": STATE_NONE, "updated_at": 0}
+    payload = {
+        "state": state,
+        "prior": prior if state == STATE_IN_REVIEW else STATE_NONE,
+        "baseline12": current12,
+        "updated_at": time.time(),
+    }
+    _write(data_root, stem, payload)
+    return payload
+
+
 def restore_previous(data_root: Path | str, stem: str, current12: str) -> dict:
     """放弃/重置：回到进入「审核中」之前的状态。"""
     existing = load(data_root, stem)

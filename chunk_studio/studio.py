@@ -404,7 +404,8 @@ class Studio:
         """把文件下所有切片的 ``source`` 设为某类别，并记入 sources.json。
 
         - 有草稿时同步改草稿块，并按新基线重命名草稿（否则草稿立刻过期）；
-        - 改类别算一次编辑：审核状态置 in_review。
+        - 只改来源标注，不改审核语义：沿用操作前的审核状态（按新指纹记住），
+          不会把「已审核/审核中」退回「未审核」。
         """
         if not self.available:
             raise ManifestError(self.error or "本地数据目录不可用")
@@ -417,6 +418,15 @@ class Studio:
         chunks_path = Path(entry.jsonl)
         if not chunks_path.is_file():
             raise ManifestError(f"切片文件不存在：{chunks_path}")
+
+        stem = self._stem_for(key)
+        old12 = drafts.sha12(chunks_path)
+        raw = review.load(self.cfg.data_root, stem)
+        keep_review = (
+            raw["state"] in (review.STATE_IN_REVIEW, review.STATE_REVIEWED)
+            and bool(old12)
+            and raw["baseline12"] == old12
+        )
 
         mapping = source_tags.load(self.cfg.data_root)
         if category:
@@ -443,7 +453,14 @@ class Studio:
             draft["saved_at"] = path.stat().st_mtime
             draft["chunks"] = [dict(chunk) for chunk in draft_chunks]
 
-        self._mark_in_review(key)
+        new12 = drafts.sha12(chunks_path)
+        review.carry_over(
+            self.cfg.data_root,
+            stem,
+            new12,
+            raw["state"] if keep_review else review.STATE_NONE,
+            raw["prior"] if keep_review else review.STATE_NONE,
+        )
         self.reload()
         return {
             "ok": True,
