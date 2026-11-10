@@ -20,6 +20,7 @@ from .autopart import materialize_chunks
 from .chunker import WatchService, engine_info
 from .config import Config, ConfigError
 from . import drafts
+from . import sources as source_tags
 from . import status as review
 from .fac_bridge import FacBridge
 from .manifest import DirManifest, ManifestError
@@ -398,6 +399,58 @@ class Studio:
             "n_deleted": len(deleted),
         }
 
+    # -- 来源类别（P3，文件级人工标注） ---------------------------------
+    def set_file_source(self, key: str, category: object) -> dict:
+        """把文件下所有切片的 ``source`` 设为某类别，并记入 sources.json。
+
+        - 有草稿时同步改草稿块，并按新基线重命名草稿（否则草稿立刻过期）；
+        - 改类别算一次编辑：审核状态置 in_review。
+        """
+        if not self.available:
+            raise ManifestError(self.error or "本地数据目录不可用")
+        category = source_tags.validate(category)
+        entry = self.bridge_for(key).manifest.get(key)
+        law_name = entry.law_name
+        chunks_path = Path(entry.jsonl)
+        if not chunks_path.is_file():
+            raise ManifestError(f"切片文件不存在：{chunks_path}")
+
+        mapping = source_tags.load(self.cfg.data_root)
+        if category:
+            mapping[law_name] = category
+        else:
+            mapping.pop(law_name, None)
+        source_tags.save(self.cfg.data_root, mapping)
+
+        n_chunks = source_tags.apply_to_chunks_file(chunks_path, category)
+
+        draft = self._drafts.get(key)
+        if draft and not draft.get("stale"):
+            draft_chunks = drafts.read_chunks(draft["path"])
+            source_tags.apply_to_chunks(draft_chunks, category)
+            new_baseline = drafts.sha12(chunks_path)
+            path = drafts.save_draft(
+                Path(self.cfg.data_root) / "draft",
+                draft["stem"],
+                new_baseline,
+                draft_chunks,
+            )
+            draft["path"] = path
+            draft["baseline12"] = new_baseline
+            draft["saved_at"] = path.stat().st_mtime
+            draft["chunks"] = [dict(chunk) for chunk in draft_chunks]
+
+        self._mark_in_review(key)
+        self.reload()
+        return {
+            "ok": True,
+            "key": key,
+            "law_name": law_name,
+            "source": category,
+            "label": category or source_tags.UNSET_LABEL,
+            "n_chunks": n_chunks,
+        }
+
     # -- 载荷 -----------------------------------------------------------
     def files_payload(self) -> dict:
         """文件清单（左栏数据），只来自本地两目录数据源。"""
@@ -411,11 +464,15 @@ class Studio:
             }
         bridge = bridges[0]
         payload = bridge.manifest.payload()
+        source_map = source_tags.load(self.cfg.data_root)
         for group in payload.get("groups") or []:
             for item in group.get("files") or []:
                 draft = self.draft_payload(item.get("key") or "")
                 item["draft"] = bool(draft.get("exists"))
                 item["draft_stale"] = bool(draft.get("stale"))
+                item["source_category"] = source_tags.category_for(
+                    source_map, item.get("law_name") or ""
+                )
                 review_state = self._review_for(item.get("key") or "")
                 item["review_state"] = review_state.get("state")
                 item["review_label"] = review_state.get("label")

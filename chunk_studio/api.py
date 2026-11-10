@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __phase__, __version__, drafts
+from . import sources as source_tags
 from .chunker import ChunkerError
 from .config import ConfigError
 from .manifest import ManifestError, SourceMissingError
@@ -213,6 +214,21 @@ class App:
             if result.get("n_deleted"):
                 result["files"] = self.studio.files_payload()
             return _json(result, status)
+
+        if method == "POST" and path == "/api/files/source":
+            # 文件级来源类别（人工标注）：写 sources.json + 重写该文件所有块
+            data = self._read_json(body)
+            key = str(data.get("key") or "").strip()
+            if not key:
+                raise ApiError(400, "key 不能为空")
+            try:
+                result = self.studio.set_file_source(key, data.get("source"))
+            except source_tags.SourceError as exc:
+                raise ApiError(400, str(exc)) from exc
+            except ManifestError as exc:
+                raise ApiError(400, str(exc)) from exc
+            result["files"] = self.studio.files_payload()
+            return _json(result)
 
         if method == "GET" and path == "/api/watch":
             return _json(self.studio.watch.snapshot())

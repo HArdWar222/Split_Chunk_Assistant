@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config
+from . import sources
 from .manifest import CHUNKS_NAME, EXTRAS_NAME_LOCAL, REPORT_NAME
 from .paths import fallback_engine_roots, vendor_root
 
@@ -307,6 +308,18 @@ def run_engine_file(cfg: Config, engine_root: Path, item: PendingFile) -> dict:
         if err:
             result["ok"] = False
             result["message"] = err
+        else:
+            # 重新切块后用人工标注的来源类别回填，避免 source 被引擎结果覆盖。
+            try:
+                category = sources.category_for(
+                    sources.load(cfg.data_root), item.source.stem
+                )
+                if category:
+                    sources.apply_to_chunks_file(
+                        doc_dir / (item.source.stem + CHUNKS_SUFFIX), category
+                    )
+            except (OSError, sources.SourceError):
+                pass
     _cleanup_tmp(tmp_dir)
     return result
 

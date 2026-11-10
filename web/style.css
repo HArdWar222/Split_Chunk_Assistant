@@ -594,6 +594,7 @@ body.no-lanes .line .lanes { display: none; }
 .draft-badge.stale { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
 
 .badge-draft { color: #1d4ed8; background: #e8efff; border-color: #bfd3ff; }
+.badge-cat { color: #6d28d9; background: #f3e8ff; border-color: #d8b4fe; }
 
 .edit-tools .diff {
   font-family: var(--mono);

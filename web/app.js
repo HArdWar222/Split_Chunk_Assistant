@@ -934,9 +934,48 @@
     ev.preventDefault();
     hideCtxMenu();
     el.ctxMenu.innerHTML = "";
+    el.ctxMenu.appendChild(ctxItem("🏷 来源类别…", file.source_category || "未设置", function () { pickFileSource(file); }));
     el.ctxMenu.appendChild(ctxItem("🗑 删除此文件…", file.law_name, function () { confirmDeleteFiles([file.key]); }));
     el.ctxMenu.appendChild(ctxItem("📄 打开此文件", file.law_name, function () { selectFile(file); }));
     placeCtxMenu(ev);
+  }
+
+  var SOURCE_CATEGORIES = ["法律", "部门规章", "地方标准", "规范性文件"];
+
+  function pickFileSource(file) {
+    var options = SOURCE_CATEGORIES.map(function (category) {
+      return {
+        label: (file.source_category === category ? "✓ " : "") + category,
+        value: category,
+        primary: file.source_category === category
+      };
+    });
+    options.push({ label: "未设置", value: "" });
+    options.push({ label: "取消", value: null });
+    askChoice(
+      "来源类别 · " + file.law_name,
+      "选一个类别后，会把该文件下所有切片的 source 统一写成它（提交后检索按这个值过滤）。" +
+        (file.draft ? "该文件有未提交草稿，会一起同步。" : ""),
+      options
+    ).then(function (choice) {
+      if (choice === null) return;
+      setFileSource(file, choice);
+    });
+  }
+
+  function setFileSource(file, category) {
+    postJSON("/api/files/source", { key: file.key, source: category }).then(function (res) {
+      if (res.files) state.data = res.files;
+      renderStats(state.data);
+      renderTree();
+      showToast(
+        "已把「" + (res.law_name || file.law_name) + "」的 " + fmtInt(res.n_chunks || 0) +
+        " 个切片 source 设为「" + (res.label || "未设置") + "」",
+        "ok"
+      );
+    }).catch(function (err) {
+      showToast("设置来源类别失败：" + err.message, "err");
+    });
   }
 
   function askConfirm(title, text, okLabel) {
@@ -1088,6 +1127,9 @@
         } else if (file.gate_ok === false) badges.push("<span class='badge badge-err'>gate ✗</span>");
         else if (file.gate_ok === true) badges.push("<span class='badge badge-ok'>gate ✓</span>");
         if (file.n_warnings > 0) badges.push("<span class='badge badge-warn'>warning " + file.n_warnings + "</span>");
+        if (file.source_category) {
+          badges.push("<span class='badge badge-cat' title='来源类别（右键文件可改）'>" + escapeHtml(file.source_category) + "</span>");
+        }
         if (file.draft) badges.push("<span class='badge badge-draft' title='有未提交的草稿'>草稿</span>");
 
         btn.innerHTML =

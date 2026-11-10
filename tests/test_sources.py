@@ -1,0 +1,146 @@
+"""来源类别（P3 文件级人工标注）的单测。"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from chunk_studio import drafts, sources
+from chunk_studio.config import Config
+from chunk_studio.manifest import ManifestError
+from chunk_studio.studio import Studio
+from tests.fixtures import make_two_file_data_dir
+
+KEY = "data/测试法"
+OTHER = "data/GB 0001-2020 测试标准"
+
+
+class SourcesModuleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_validate_accepts_categories_and_empty(self) -> None:
+        for category in sources.CATEGORIES:
+            self.assertEqual(sources.validate(category), category)
+        self.assertEqual(sources.validate(""), "")
+        self.assertEqual(sources.validate(None), "")
+
+    def test_validate_rejects_unknown(self) -> None:
+        with self.assertRaises(sources.SourceError):
+            sources.validate("宪法")
+        with self.assertRaises(sources.SourceError):
+            sources.validate("地方标准x")
+
+    def test_load_missing_is_empty(self) -> None:
+        self.assertEqual(sources.load(self.base), {})
+
+    def test_save_load_roundtrip_ignores_bad_rows(self) -> None:
+        sources.save(self.base, {"甲法": "法律", "乙法": "乱写", "": "地方标准"})
+        data = sources.load(self.base)
+        self.assertEqual(data, {"甲法": "法律"})
+        # 损坏的 json 返回空表而不是抛错
+        path = sources.sources_path(self.base)
+        path.write_text("{oops", encoding="utf-8")
+        self.assertEqual(sources.load(self.base), {})
+
+    def test_apply_to_chunks_file_rewrites_every_row(self) -> None:
+        data_root = make_two_file_data_dir(self.base)
+        studio = Studio(cfg=Config(data_root=str(data_root), port=8790))
+        chunks_path = Path(studio.bridge.manifest.get(KEY).jsonl)
+        n = sources.apply_to_chunks_file(chunks_path, "规范性文件")
+        rows = [json.loads(line) for line in chunks_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(n, len(rows))
+        self.assertEqual({row["source"] for row in rows}, {"规范性文件"})
+
+
+class SetFileSourceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.data_root = make_two_file_data_dir(self.base)
+        self.studio = Studio(cfg=Config(data_root=str(self.data_root), port=8790))
+        self.entry = self.studio.bridge.manifest.get(KEY)
+        self.chunks_path = Path(self.entry.jsonl)
+        self.stem = self.studio._stem_for(KEY)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _sources_of_file(self) -> set[str]:
+        rows = [
+            json.loads(line)
+            for line in self.chunks_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return {str(row.get("source") or "") for row in rows}
+
+    def test_set_source_updates_chunks_and_sources_json(self) -> None:
+        result = self.studio.set_file_source(KEY, "地方标准")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["n_chunks"], 2)
+        self.assertEqual(self._sources_of_file(), {"地方标准"})
+        self.assertEqual(sources.load(self.data_root), {self.entry.law_name: "地方标准"})
+        # 其它文件不变
+        other = self.studio.bridge.manifest.get(OTHER)
+        other_rows = [
+            json.loads(line)
+            for line in Path(other.jsonl).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertNotIn("地方标准", {str(row.get("source") or "") for row in other_rows})
+
+    def test_files_payload_exposes_category(self) -> None:
+        self.studio.set_file_source(KEY, "部门规章")
+        payload = self.studio.files_payload()
+        found = {}
+        for group in payload["groups"]:
+            for item in group["files"]:
+                found[item["key"]] = item.get("source_category")
+        self.assertEqual(found[KEY], "部门规章")
+        self.assertEqual(found[OTHER], "")
+
+    def test_clear_source_removes_mapping(self) -> None:
+        self.studio.set_file_source(KEY, "法律")
+        result = self.studio.set_file_source(KEY, "")
+        self.assertEqual(result["label"], sources.UNSET_LABEL)
+        self.assertEqual(self._sources_of_file(), {""})
+        self.assertEqual(sources.load(self.data_root), {})
+
+    def test_invalid_category_is_rejected_without_writing(self) -> None:
+        with self.assertRaises(sources.SourceError):
+            self.studio.set_file_source(KEY, "宪法")
+        self.assertEqual(self._sources_of_file(), {""})
+        self.assertEqual(sources.load(self.data_root), {})
+
+    def test_unknown_key_is_rejected(self) -> None:
+        with self.assertRaises(ManifestError):
+            self.studio.set_file_source("data/不存在", "法律")
+
+    def test_draft_is_synced_and_renamed_to_new_baseline(self) -> None:
+        self.studio.doc_payload(KEY)
+        self.studio.save_draft(KEY)
+        old_sha = drafts.sha12(self.chunks_path)
+        old_draft = drafts.draft_file(self.data_root / "draft", self.stem, old_sha)
+        self.assertTrue(old_draft.is_file())
+
+        self.studio.set_file_source(KEY, "规范性文件")
+        new_sha = drafts.sha12(self.chunks_path)
+        self.assertNotEqual(new_sha, old_sha)
+        files = drafts.draft_files(self.data_root / "draft", self.stem)
+        self.assertEqual(len(files), 1)
+        self.assertEqual(drafts.parse_draft_name(files[0].name), (self.stem, new_sha))
+        draft_rows = drafts.read_chunks(files[0])
+        self.assertEqual({str(row.get("source") or "") for row in draft_rows}, {"规范性文件"})
+        # 草稿仍可正常提交（基线一致）
+        doc = self.studio.commit_draft(KEY)
+        self.assertIn("committed", doc)
+
+
+if __name__ == "__main__":
+    unittest.main()
