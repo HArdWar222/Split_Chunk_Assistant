@@ -400,19 +400,12 @@ class Studio:
         }
 
     # -- 来源类别（P3，文件级人工标注） ---------------------------------
-    def set_file_source(self, key: str, category: object) -> dict:
-        """把文件下所有切片的 ``source`` 设为某类别，并记入 sources.json。
+    def _apply_source_to_key(self, key: str, category: str, mapping: dict) -> dict:
+        """把单个文件的 source 写成 category（调用方负责 save mapping / reload）。
 
         - 有草稿时同步改草稿块，并按新基线重命名草稿（否则草稿立刻过期）；
-        - 只改来源标注，不改审核语义：沿用操作前的审核状态（按新指纹记住），
-          不会把「已审核/审核中」退回「未审核」。
+        - 只改来源标注，不改审核语义：沿用操作前的审核状态（按新指纹记住）。
         """
-        if not self.available:
-            raise ManifestError(self.error or "本地数据目录不可用")
-        category = source_tags.validate(category)
-        if category:
-            # 自定义类别：先登记到类别列表（内置 4 类也会幂等保留）
-            source_tags.add_category(self.cfg.data_root, category)
         entry = self.bridge_for(key).manifest.get(key)
         law_name = entry.law_name
         chunks_path = Path(entry.jsonl)
@@ -428,12 +421,10 @@ class Studio:
             and raw["baseline12"] == old12
         )
 
-        mapping = source_tags.load(self.cfg.data_root)
         if category:
             mapping[law_name] = category
         else:
             mapping.pop(law_name, None)
-        source_tags.save(self.cfg.data_root, mapping)
 
         n_chunks = source_tags.apply_to_chunks_file(chunks_path, category)
 
@@ -461,14 +452,61 @@ class Studio:
             raw["state"] if keep_review else review.STATE_NONE,
             raw["prior"] if keep_review else review.STATE_NONE,
         )
+        return {"key": key, "law_name": law_name, "n_chunks": n_chunks}
+
+    def set_file_source(self, key: str, category: object) -> dict:
+        """把文件下所有切片的 ``source`` 设为某类别，并记入 sources.json。"""
+        if not self.available:
+            raise ManifestError(self.error or "本地数据目录不可用")
+        category = source_tags.validate(category)
+        if category:
+            # 自定义类别：先登记到类别列表（内置 4 类也会幂等保留）
+            source_tags.add_category(self.cfg.data_root, category)
+        mapping = source_tags.load(self.cfg.data_root)
+        applied = self._apply_source_to_key(key, category, mapping)
+        source_tags.save(self.cfg.data_root, mapping)
         self.reload()
         return {
             "ok": True,
-            "key": key,
-            "law_name": law_name,
+            "key": applied["key"],
+            "law_name": applied["law_name"],
             "source": category,
             "label": category or source_tags.UNSET_LABEL,
-            "n_chunks": n_chunks,
+            "n_chunks": applied["n_chunks"],
+            "n_files": 1,
+            "files": [applied],
+            "categories": source_tags.list_categories(self.cfg.data_root),
+        }
+
+    def set_files_source(self, keys: list[str], category: object) -> dict:
+        """批量把多个文件的 ``source`` 统一设为某类别（一次 reload）。"""
+        if not self.available:
+            raise ManifestError(self.error or "本地数据目录不可用")
+        category = source_tags.validate(category)
+        if category:
+            source_tags.add_category(self.cfg.data_root, category)
+        ordered: list[str] = []
+        for raw_key in keys or []:
+            key = str(raw_key or "").strip()
+            if key and key not in ordered:
+                ordered.append(key)
+        if not ordered:
+            raise ManifestError("批量设置来源类别需要至少一个文件")
+        # 先整体校验 key，避免写到一半才发现有坏 key
+        for key in ordered:
+            self.bridge_for(key).manifest.get(key)
+
+        mapping = source_tags.load(self.cfg.data_root)
+        applied = [self._apply_source_to_key(key, category, mapping) for key in ordered]
+        source_tags.save(self.cfg.data_root, mapping)
+        self.reload()
+        return {
+            "ok": True,
+            "source": category,
+            "label": category or source_tags.UNSET_LABEL,
+            "n_files": len(applied),
+            "n_chunks": sum(int(item["n_chunks"]) for item in applied),
+            "files": applied,
             "categories": source_tags.list_categories(self.cfg.data_root),
         }
 

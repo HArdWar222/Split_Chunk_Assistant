@@ -205,6 +205,37 @@ class SetFileSourceTest(unittest.TestCase):
 
         self.assertEqual(self._review_state(), review.STATE_NONE)
 
+    # -- 批量设置来源 -----------------------------------------------------
+    def test_batch_set_source_updates_all_files(self) -> None:
+        review.mark_reviewed(self.data_root, self.stem, drafts.sha12(self.chunks_path))
+
+        result = self.studio.set_files_source([KEY, OTHER], "部门规章")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["n_files"], 2)
+        self.assertEqual(result["label"], "部门规章")
+        self.assertEqual(
+            sources.load(self.data_root),
+            {self.entry.law_name: "部门规章", "GB 0001-2020 测试标准": "部门规章"},
+        )
+        self.assertEqual(self._sources_of_file(), {"部门规章"})
+        other = self.studio.bridge.manifest.get(OTHER)
+        other_rows = [
+            json.loads(line)
+            for line in Path(other.jsonl).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual({str(row.get("source") or "") for row in other_rows}, {"部门规章"})
+        # 审核状态延续：已审核的仍是已审核，未审核的仍是未审核
+        self.assertEqual(self.studio._review_for(KEY)["state"], review.STATE_REVIEWED)
+        self.assertEqual(self.studio._review_for(OTHER)["state"], review.STATE_NONE)
+
+    def test_batch_set_source_rejects_unknown_key_before_writing(self) -> None:
+        with self.assertRaises(ManifestError):
+            self.studio.set_files_source([KEY, "data/不存在"], "法律")
+        self.assertEqual(sources.load(self.data_root), {})
+        self.assertEqual(self._sources_of_file(), {""})
+
 
 if __name__ == "__main__":
     unittest.main()

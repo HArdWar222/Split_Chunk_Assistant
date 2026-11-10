@@ -36,7 +36,8 @@
     rowPickClick: false,      // 本次 mousedown 是否是「单击」（未按 Shift）
     multiSel: new Set(),      // Ctrl/⌘ 多选中的 chunk id 集合
     deleteMode: false,        // 左栏文件删除模式
-    deleteSel: new Set(),     // 删除模式中勾选的文件 key
+    sourceMode: false,        // 左栏批量设置来源模式（复用同一套勾选 UI）
+    deleteSel: new Set(),     // 批量模式中勾选的文件 key
     deleteAnchor: "",         // Shift 连选锚点 key
     viewState: {},             // 每个文件的滚动/选中位置（切回来不回到目录）
     sourceCategories: [],      // 来源类别列表（内置 + 自定义，来自 /api/files）
@@ -56,8 +57,10 @@
     fileInput: document.getElementById("file-input"),
     dropHint: document.getElementById("drop-hint"),
     btnDeleteMode: document.getElementById("btn-delete-mode"),
+    btnSourceMode: document.getElementById("btn-source-mode"),
     deleteBar: document.getElementById("delete-bar"),
     deleteBarText: document.getElementById("delete-bar-text"),
+    btnBatchSource: document.getElementById("btn-batch-source"),
     btnDeleteCancel: document.getElementById("btn-delete-cancel"),
     btnDeleteConfirm: document.getElementById("btn-delete-confirm"),
     confirmDialog: document.getElementById("confirm-dialog"),
@@ -794,8 +797,14 @@
     if (el.btnDeleteMode) {
       el.btnDeleteMode.addEventListener("click", function () { setDeleteMode(!state.deleteMode); });
     }
+    if (el.btnSourceMode) {
+      el.btnSourceMode.addEventListener("click", function () { setSourceMode(!state.sourceMode); });
+    }
+    if (el.btnBatchSource) {
+      el.btnBatchSource.addEventListener("click", function () { openBatchSourceDialog(); });
+    }
     if (el.btnDeleteCancel) {
-      el.btnDeleteCancel.addEventListener("click", function () { setDeleteMode(false); });
+      el.btnDeleteCancel.addEventListener("click", function () { setBatchMode(null); });
     }
     if (el.btnDeleteConfirm) {
       el.btnDeleteConfirm.addEventListener("click", function () {
@@ -891,22 +900,47 @@
   }
 
   // ---------- 文件删除（P3）：批量模式 + 单文件右键 ----------
+  function batchModeOn() {
+    return !!(state.deleteMode || state.sourceMode);
+  }
+
   function updateDeleteBar() {
     if (!el.deleteBar) return;
+    var on = batchModeOn();
     var n = state.deleteSel.size;
-    el.deleteBar.hidden = !state.deleteMode;
+    el.deleteBar.hidden = !on;
     if (el.deleteBarText) el.deleteBarText.textContent = "已选 " + n + " 个文件";
-    if (el.btnDeleteConfirm) el.btnDeleteConfirm.disabled = n === 0;
+    if (el.btnDeleteConfirm) {
+      el.btnDeleteConfirm.hidden = state.sourceMode;
+      el.btnDeleteConfirm.disabled = n === 0;
+    }
+    if (el.btnBatchSource) {
+      el.btnBatchSource.hidden = !state.sourceMode;
+      el.btnBatchSource.disabled = n === 0;
+    }
   }
 
   function setDeleteMode(on) {
-    state.deleteMode = !!on;
+    setBatchMode(on ? "delete" : null);
+  }
+
+  function setSourceMode(on) {
+    setBatchMode(on ? "source" : null);
+  }
+
+  function setBatchMode(kind) {
+    state.deleteMode = kind === "delete";
+    state.sourceMode = kind === "source";
     state.deleteSel = new Set();
     state.deleteAnchor = "";
-    if (el.sidebar) el.sidebar.classList.toggle("delete-mode", state.deleteMode);
+    if (el.sidebar) el.sidebar.classList.toggle("delete-mode", batchModeOn());
     if (el.btnDeleteMode) {
       el.btnDeleteMode.classList.toggle("active", state.deleteMode);
       el.btnDeleteMode.setAttribute("aria-pressed", state.deleteMode ? "true" : "false");
+    }
+    if (el.btnSourceMode) {
+      el.btnSourceMode.classList.toggle("active", state.sourceMode);
+      el.btnSourceMode.setAttribute("aria-pressed", state.sourceMode ? "true" : "false");
     }
     hideCtxMenu();
     updateDeleteBar();
@@ -956,7 +990,7 @@
   }
 
   var DEFAULT_SOURCE_CATEGORIES = ["法律", "部门规章", "地方标准", "规范性文件"];
-  var sourceDialogState = { file: null };
+  var sourceDialogState = { files: [], batch: false, common: "", mixed: false };
 
   function sourceCategories() {
     var list = (state.sourceCategories || []).slice();
@@ -965,12 +999,42 @@
   }
 
   function openSourceDialog(file) {
-    sourceDialogState.file = file;
+    if (!file) return;
+    sourceDialogState.files = [file];
+    sourceDialogState.batch = false;
+    sourceDialogState.common = file.source_category || "";
+    sourceDialogState.mixed = false;
     el.sourceDialogTitle.textContent = "来源类别 · " + file.law_name;
     el.sourceDialogHint.textContent =
       "选一个已有类别，或点「＋ 新增自定义来源」新建；设置后会把该文件下所有切片的 source 统一写成它。" +
       (file.draft ? "该文件有未提交草稿，会一起同步。" : "");
     el.sourceCurrentLabel.textContent = file.source_category || "未设置";
+    el.sourceAddRow.hidden = true;
+    el.sourceNewName.value = "";
+    closeSourceMenu();
+    renderSourceMenu();
+    el.sourceDialog.scrollTop = 0;
+    if (!el.sourceDialog.open) el.sourceDialog.showModal();
+  }
+
+  function openBatchSourceDialog() {
+    var keys = Array.from(state.deleteSel);
+    var files = deleteOrder().filter(function (file) { return keys.indexOf(file.key) >= 0; });
+    if (!files.length) {
+      showToast("请先在左侧勾选要改来源的文件", "warn");
+      return;
+    }
+    var common = files[0].source_category || "";
+    var mixed = files.some(function (file) { return (file.source_category || "") !== common; });
+    sourceDialogState.files = files;
+    sourceDialogState.batch = true;
+    sourceDialogState.common = common;
+    sourceDialogState.mixed = mixed;
+    el.sourceDialogTitle.textContent = "批量设置来源类别 · " + files.length + " 个文件";
+    el.sourceDialogHint.textContent =
+      "选一个已有类别，或点「＋ 新增自定义来源」新建；设置后会把选中的 " + files.length +
+      " 个文件下所有切片的 source 统一写成它。只改来源标注，不改变审核状态。";
+    el.sourceCurrentLabel.textContent = mixed ? "多个类别（将统一覆盖）" : (common || "未设置");
     el.sourceAddRow.hidden = true;
     el.sourceNewName.value = "";
     closeSourceMenu();
@@ -997,44 +1061,59 @@
 
   function renderSourceMenu() {
     if (!el.sourceMenuItems) return;
-    var file = sourceDialogState.file;
-    var current = file ? (file.source_category || "") : "";
+    if (!sourceDialogState.files.length) {
+      el.sourceMenuItems.innerHTML = "";
+      return;
+    }
+    var current = sourceDialogState.mixed ? null : sourceDialogState.common;
     el.sourceMenuItems.innerHTML = "";
     sourceCategories().forEach(function (category) {
+      var checked = current !== null && current === category;
       var btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "source-item" + (current === category ? " checked" : "");
+      btn.className = "source-item" + (checked ? " checked" : "");
       btn.setAttribute("role", "option");
-      btn.setAttribute("aria-selected", current === category ? "true" : "false");
-      btn.textContent = (current === category ? "✓ " : "") + category;
-      btn.addEventListener("click", function () { applyFileSource(category); });
+      btn.setAttribute("aria-selected", checked ? "true" : "false");
+      btn.textContent = (checked ? "✓ " : "") + category;
+      btn.addEventListener("click", function () { applySourceSelection(category); });
       el.sourceMenuItems.appendChild(btn);
     });
+    var unsetChecked = current !== null && !current;
     var unset = document.createElement("button");
     unset.type = "button";
-    unset.className = "source-item" + (current ? "" : " checked");
+    unset.className = "source-item" + (unsetChecked ? " checked" : "");
     unset.setAttribute("role", "option");
-    unset.setAttribute("aria-selected", current ? "false" : "true");
-    unset.textContent = (current ? "" : "✓ ") + "未设置";
-    unset.addEventListener("click", function () { applyFileSource(""); });
+    unset.setAttribute("aria-selected", unsetChecked ? "true" : "false");
+    unset.textContent = (unsetChecked ? "✓ " : "") + "未设置";
+    unset.addEventListener("click", function () { applySourceSelection(""); });
     el.sourceMenuItems.appendChild(unset);
   }
 
-  function applyFileSource(category) {
-    var file = sourceDialogState.file;
-    if (!file) return;
+  function applySourceSelection(category) {
+    if (!sourceDialogState.files.length) return;
+    var batch = sourceDialogState.batch;
+    var files = sourceDialogState.files.slice();
     closeSourceMenu();
     if (el.sourceDialog.open) el.sourceDialog.close();
-    setFileSource(file, category).catch(function () { /* setFileSource 已 toast */ });
+    if (batch) {
+      setBatchSource(files.map(function (file) { return file.key; }), category)
+        .catch(function () { /* 已 toast */ });
+    } else {
+      setFileSource(files[0], category).catch(function () { /* 已 toast */ });
+    }
+  }
+
+  function applySourceResponse(res) {
+    if (res.files) state.data = res.files;
+    if (Array.isArray(res.categories)) state.sourceCategories = res.categories.slice();
+    else if (res.files && Array.isArray(res.files.source_categories)) state.sourceCategories = res.files.source_categories.slice();
+    renderStats(state.data);
+    renderTree();
   }
 
   function setFileSource(file, category) {
     return postJSON("/api/files/source", { key: file.key, source: category }).then(function (res) {
-      if (res.files) state.data = res.files;
-      if (Array.isArray(res.categories)) state.sourceCategories = res.categories.slice();
-      else if (res.files && Array.isArray(res.files.source_categories)) state.sourceCategories = res.files.source_categories.slice();
-      renderStats(state.data);
-      renderTree();
+      applySourceResponse(res);
       showToast(
         "已把「" + (res.law_name || file.law_name) + "」的 " + fmtInt(res.n_chunks || 0) +
         " 个切片 source 设为「" + (res.label || "未设置") + "」",
@@ -1047,19 +1126,31 @@
     });
   }
 
+  function setBatchSource(keys, category) {
+    return postJSON("/api/files/source", { keys: keys, source: category }).then(function (res) {
+      applySourceResponse(res);
+      showToast(
+        "已把 " + fmtInt(res.n_files || keys.length) + " 个文件的 " + fmtInt(res.n_chunks || 0) +
+        " 个切片 source 设为「" + (res.label || "未设置") + "」",
+        "ok"
+      );
+      setBatchMode(null);
+      return res;
+    }).catch(function (err) {
+      showToast("批量设置来源类别失败：" + err.message, "err");
+      throw err;
+    });
+  }
+
   function submitNewSource() {
-    var file = sourceDialogState.file;
-    if (!file) return;
+    if (!sourceDialogState.files.length) return;
     var name = (el.sourceNewName.value || "").trim();
     if (!name) {
       el.sourceNewName.focus();
       showToast("请输入新来源名称", "warn");
       return;
     }
-    closeSourceMenu();
-    setFileSource(file, name).then(function () {
-      if (el.sourceDialog.open) el.sourceDialog.close();
-    }).catch(function () { /* setFileSource 已 toast */ });
+    applySourceSelection(name);
   }
 
   function bindSourceDialog() {
@@ -1143,7 +1234,7 @@
     (deleted || []).forEach(function (key) { deletedSet[key] = 1; });
     if (state.selected && deletedSet[state.selected.key]) clearDocView();
     state.deleteSel = new Set();
-    setDeleteMode(false);
+    setBatchMode(null);
     renderStats(state.data);
     if (failed && failed.length) {
       showToast("已删除 " + deleted.length + " 个，失败 " + failed.length + " 个：" + failed[0].error, "err");
@@ -1223,7 +1314,7 @@
         var badges = [];
         var reviewState = file.review_state || "none";
         var reviewLabel = file.review_label || "未审核";
-        if (state.deleteMode) {
+        if (batchModeOn()) {
           var checked = state.deleteSel.has(file.key);
           badges.push(
             "<span class='delete-check" + (checked ? " checked" : "") +
@@ -1249,10 +1340,10 @@
           "<span class='name'>" + escapeHtml(file.law_name) + "</span>" +
           "<span class='meta'><span>切块 " + fmtInt(file.n_chunks) + "</span>" +
           badges.join("") + "</span>";
-        if (state.deleteMode) btn.className += " delete-mode";
-        if (state.deleteMode && state.deleteSel.has(file.key)) btn.className += " selected-for-delete";
+        if (batchModeOn()) btn.className += " delete-mode";
+        if (batchModeOn() && state.deleteSel.has(file.key)) btn.className += " selected-for-delete";
         btn.addEventListener("click", function (ev) {
-          if (state.deleteMode) toggleDeleteKey(file.key, ev);
+          if (batchModeOn()) toggleDeleteKey(file.key, ev);
           else selectFile(file);
         });
         btn.addEventListener("contextmenu", function (ev) { openFileMenu(ev, file); });
@@ -4529,7 +4620,7 @@
       var mod = ev.ctrlKey || ev.metaKey;
       var key = String(ev.key || "").toLowerCase();
       if (ev.key === "Escape") {
-        if (state.deleteMode) setDeleteMode(false);
+        if (batchModeOn()) setBatchMode(null);
         hideCtxMenu();
         hideSplitCaret();
         hideRowPick();

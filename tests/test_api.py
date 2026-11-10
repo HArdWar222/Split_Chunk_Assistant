@@ -660,6 +660,27 @@ class ReviewApiTest(unittest.TestCase):
         self.post("/api/reload", {})
         self.assertEqual(self.file_review()["review_state"], "none")
 
+    def test_batch_source_keeps_reviewed_state(self):
+        self.op({"op": "drop", "id": "测试法-0002"})
+        self.post("/api/draft/save", {"key": self.KEY})
+        self.post("/api/draft/commit", {"key": self.KEY})
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+
+        status, data = self.body(self.post(
+            "/api/files/source",
+            {"keys": [self.KEY, "data/GB 0001-2020 测试标准"], "source": "部门规章"},
+        ))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["n_files"], 2)
+        self.assertEqual(data["label"], "部门规章")
+        self.assertEqual(self.file_review()["review_state"], "reviewed")
+        self.assertEqual(
+            self.file_review("data/GB 0001-2020 测试标准")["source_category"], "部门规章"
+        )
+
+        status, data = self.body(self.post("/api/files/source", {"keys": [], "source": "法律"}))
+        self.assertEqual(status, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

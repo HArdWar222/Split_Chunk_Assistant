@@ -16,7 +16,7 @@
 ; - Bump MyAppVersion for each release.
 
 #define MyAppName "SplitChunkAssistant"
-#define MyAppVersion "0.3.46"
+#define MyAppVersion "0.3.47"
 #define MyAppPublisher "SplitChunkAssistant"
 #define MyAppExeName "SplitChunkAssistant.exe"
 
@@ -54,6 +54,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
 
 
 

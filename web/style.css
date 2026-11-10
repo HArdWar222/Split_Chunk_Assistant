@@ -995,6 +995,7 @@ body.row-picking { user-select: none; }
 
 /* ---------- 文件删除模式（P3） ---------- */
 #btn-delete-mode.active { background: #fee2e2; border-color: #ef4444; color: #991b1b; }
+#btn-source-mode.active { background: #f3e8ff; border-color: #a855f7; color: #6d28d9; }
 .sidebar.delete-mode .review-dot { display: none; }
 .delete-check { position: absolute; top: 9px; right: 9px; width: 16px; height: 16px;
   border-radius: 50%; border: 2px solid #94a3b8; background: #fff; color: #fff;

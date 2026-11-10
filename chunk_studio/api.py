@@ -216,13 +216,20 @@ class App:
             return _json(result, status)
 
         if method == "POST" and path == "/api/files/source":
-            # 文件级来源类别（人工标注）：写 sources.json + 重写该文件所有块
+            # 文件级来源类别（人工标注）：写 sources.json + 重写文件所有块
+            # 单文件传 key；批量传 keys（对选中的文件统一替换 source）
             data = self._read_json(body)
+            keys_raw = data.get("keys")
             key = str(data.get("key") or "").strip()
-            if not key:
-                raise ApiError(400, "key 不能为空")
             try:
-                result = self.studio.set_file_source(key, data.get("source"))
+                if isinstance(keys_raw, list) and keys_raw:
+                    result = self.studio.set_files_source(
+                        [str(item) for item in keys_raw], data.get("source")
+                    )
+                else:
+                    if not key:
+                        raise ApiError(400, "key 或 keys 不能为空")
+                    result = self.studio.set_file_source(key, data.get("source"))
             except source_tags.SourceError as exc:
                 raise ApiError(400, str(exc)) from exc
             except ManifestError as exc:
