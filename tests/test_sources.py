@@ -31,23 +31,42 @@ class SourcesModuleTest(unittest.TestCase):
         self.assertEqual(sources.validate(""), "")
         self.assertEqual(sources.validate(None), "")
 
-    def test_validate_rejects_unknown(self) -> None:
+    def test_validate_accepts_custom_and_rejects_bad_names(self) -> None:
+        self.assertEqual(sources.validate("行政法规"), "行政法规")
+        self.assertEqual(sources.validate("  行业标准  "), "行业标准")
         with self.assertRaises(sources.SourceError):
-            sources.validate("宪法")
+            sources.validate("a/b")
         with self.assertRaises(sources.SourceError):
-            sources.validate("地方标准x")
+            sources.validate("行" * (sources.MAX_NAME_LEN + 1))
 
     def test_load_missing_is_empty(self) -> None:
         self.assertEqual(sources.load(self.base), {})
 
-    def test_save_load_roundtrip_ignores_bad_rows(self) -> None:
-        sources.save(self.base, {"甲法": "法律", "乙法": "乱写", "": "地方标准"})
-        data = sources.load(self.base)
-        self.assertEqual(data, {"甲法": "法律"})
+    def test_save_load_roundtrip_keeps_custom_categories(self) -> None:
+        sources.save(self.base, {"甲法": "法律", "乙法": "行政法规", "": "地方标准"})
+        self.assertEqual(sources.load(self.base), {"甲法": "法律", "乙法": "行政法规"})
+        self.assertIn("行政法规", sources.list_categories(self.base))
+        registry = json.loads(sources.sources_path(self.base).read_text(encoding="utf-8"))
+        self.assertIsInstance(registry.get("categories"), list)
+        self.assertIsInstance(registry.get("files"), dict)
         # 损坏的 json 返回空表而不是抛错
         path = sources.sources_path(self.base)
         path.write_text("{oops", encoding="utf-8")
         self.assertEqual(sources.load(self.base), {})
+
+    def test_legacy_flat_format_still_loads(self) -> None:
+        path = sources.sources_path(self.base)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"甲法": "法律"}, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(sources.load(self.base), {"甲法": "法律"})
+        self.assertIn("法律", sources.list_categories(self.base))
+
+    def test_add_category_is_idempotent(self) -> None:
+        categories = sources.add_category(self.base, "行政法规")
+        self.assertIn("行政法规", categories)
+        categories = sources.add_category(self.base, "行政法规")
+        self.assertEqual(categories.count("行政法规"), 1)
+        self.assertIn("法律", categories)
 
     def test_apply_to_chunks_file_rewrites_every_row(self) -> None:
         data_root = make_two_file_data_dir(self.base)
@@ -114,9 +133,18 @@ class SetFileSourceTest(unittest.TestCase):
 
     def test_invalid_category_is_rejected_without_writing(self) -> None:
         with self.assertRaises(sources.SourceError):
-            self.studio.set_file_source(KEY, "宪法")
+            self.studio.set_file_source(KEY, "a/b")
         self.assertEqual(self._sources_of_file(), {""})
         self.assertEqual(sources.load(self.data_root), {})
+
+    def test_custom_category_is_added_and_exposed(self) -> None:
+        result = self.studio.set_file_source(KEY, "行政法规")
+        self.assertEqual(result["label"], "行政法规")
+        self.assertIn("行政法规", result["categories"])
+        self.assertEqual(self._sources_of_file(), {"行政法规"})
+        self.assertEqual(sources.load(self.data_root), {self.entry.law_name: "行政法规"})
+        payload = self.studio.files_payload()
+        self.assertIn("行政法规", payload["source_categories"])
 
     def test_unknown_key_is_rejected(self) -> None:
         with self.assertRaises(ManifestError):

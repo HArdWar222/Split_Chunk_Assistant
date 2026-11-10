@@ -1016,3 +1016,37 @@ body.resizing { user-select: none; }
 .resizer { touch-action: none; }
 
 #confirm-text { white-space: pre-line; }
+
+/* ---- 来源类别弹层（可选择已有类别或新增自定义） ---- */
+.source-picker { position: relative; margin: 10px 0 4px; }
+.source-current {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+  background: #fff; font-size: 13.5px; color: #0f172a; cursor: pointer; text-align: left;
+}
+.source-current:hover { border-color: #93c5fd; background: #f8fbff; }
+.source-caret { color: #64748b; font-size: 12px; }
+.source-menu {
+  margin-top: 6px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+  max-height: 240px; overflow: auto; padding: 4px;
+}
+.source-item {
+  display: block; width: 100%; padding: 8px 10px; border: 0; background: transparent;
+  border-radius: 6px; text-align: left; font-size: 13px; color: #0f172a; cursor: pointer;
+}
+.source-item:hover { background: #eff6ff; }
+.source-item.checked { color: #1d4ed8; font-weight: 600; background: #eff6ff; }
+.source-add {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border: 0;
+  border-top: 1px solid #e2e8f0; background: transparent; text-align: left;
+  font-size: 13px; color: #1d4ed8; cursor: pointer;
+}
+.source-add:hover { background: #eff6ff; }
+.source-add-row {
+  margin-top: 8px; padding: 8px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc;
+}
+.source-add-row input {
+  width: 100%; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 13px;
+}
+.source-add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.btn-sm { padding: 5px 10px; font-size: 12.5px; }

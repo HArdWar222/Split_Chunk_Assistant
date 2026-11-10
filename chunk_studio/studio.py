@@ -409,6 +409,9 @@ class Studio:
         if not self.available:
             raise ManifestError(self.error or "本地数据目录不可用")
         category = source_tags.validate(category)
+        if category:
+            # 自定义类别：先登记到类别列表（内置 4 类也会幂等保留）
+            source_tags.add_category(self.cfg.data_root, category)
         entry = self.bridge_for(key).manifest.get(key)
         law_name = entry.law_name
         chunks_path = Path(entry.jsonl)
@@ -449,6 +452,7 @@ class Studio:
             "source": category,
             "label": category or source_tags.UNSET_LABEL,
             "n_chunks": n_chunks,
+            "categories": source_tags.list_categories(self.cfg.data_root),
         }
 
     # -- 载荷 -----------------------------------------------------------
@@ -482,6 +486,7 @@ class Studio:
                 "ok": True,
                 "mode": "dirs",
                 "sources": [bridge.stats()],
+                "source_categories": source_tags.list_categories(self.cfg.data_root),
                 "config": self.config_payload(),
             }
         )

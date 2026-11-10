@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitChunkAssistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.44-p3r">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.45-p3s">
 </head>
 <body>
   <header class="topbar">
@@ -243,12 +243,39 @@
     </form>
   </dialog>
 
+  <dialog id="source-dialog" class="dialog op-dialog source-dialog">
+    <form method="dialog">
+      <h2 id="source-dialog-title">来源类别</h2>
+      <p class="hint" id="source-dialog-hint"></p>
+      <div class="source-picker">
+        <button id="source-current" type="button" class="source-current" aria-haspopup="listbox" aria-expanded="false">
+          <span id="source-current-label">未设置</span>
+          <span class="source-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="source-menu" id="source-menu" role="listbox" hidden>
+          <div id="source-menu-items"></div>
+          <button id="source-add" type="button" class="source-add">＋ 新增自定义来源</button>
+        </div>
+        <div class="source-add-row" id="source-add-row" hidden>
+          <input id="source-new-name" type="text" maxlength="30" placeholder="例如：行政法规、行业标准" autocomplete="off" />
+          <div class="source-add-actions">
+            <button id="source-add-cancel" type="button" class="btn btn-sm">取消</button>
+            <button id="source-add-ok" type="button" class="btn btn-primary btn-sm">确定添加</button>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button id="source-close" type="button" class="btn">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <div id="split-caret" class="split-caret" hidden aria-hidden="true"></div>
   <div id="split-hint" class="split-hint" hidden aria-live="polite"></div>
   <div id="ctx-menu" class="ctx-menu" role="menu" aria-label="切片操作" hidden></div>
 
-  <script src="/static/app.js?v=0.3.44-p3r" defer></script>
+  <script src="/static/app.js?v=0.3.45-p3s" defer></script>
 </body>
 </html>
 

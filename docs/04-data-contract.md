@@ -18,7 +18,7 @@
 | 7 | `law_level` | str | 法律 / 行政法规 / … / 国家标准 / 行业标准 |
 | 8 | `issuer` | str | 发布机关 |
 | 9 | `effective_date` | str | 生效日期（可空） |
-| 10 | `source` | str | 来源类别（文件级常量）：`法律` / `部门规章` / `地方标准` / `规范性文件`，未标注为空串 |
+| 10 | `source` | str | 来源类别（文件级常量）：内置 `法律` / `部门规章` / `地方标准` / `规范性文件`，也可在界面自定义；未标注为空串 |
 | 11 | `chunk_kind` | enum | `clause` / `table` / `title` / `front` / `appendix` / `stub` / `paragraph` |
 | 12 | `token_len` | int | `len(chunk)` 字符数（非 BPE 计数），派生 |
 | 13 | `part_index` | int | 分片序号，1 起 |
@@ -93,7 +93,7 @@
 - `law_num` 留空时按前后邻居倒推（`ops.infer_law_num`）：先取**前一块**的条号（「第X条」或标准式数字层级号 `5.4.1`，判断为同一块的续写），前面没有可参照的条号就看**后一块**；参照只认这两种条号，表号 / 附录号 /「（新增）」不作参照，推不到才写 `（新增）`（此时**需人工补**，如 `前言` / `目录` / `第一章`）；
 - `chunk_kind` 默认 `paragraph`（弹层可改成 `front` / `title` / `appendix` 等）；
 - `law_type` / `law_level` / `issuer` / `effective_date` / `source` / `law_invalid` 继承**同文件第一块**（文件级默认值）；
-- `source` 是**文件级人工类别**（`chunk_studio/sources.py`）：左栏右键文件设置后，写 `data/sources.json`（`{law_name: 类别}`）并把该文件 `chunks.jsonl` 所有行统一改成该类别；有草稿时草稿块同步并按新基线重命名；改类别算一次编辑（审核状态 `in_review`）。重新切块后由 `chunker` 按 `sources.json` 回填，不会丢；`source` 不参与 `chunk_hash`；
+- `source` 是**文件级人工类别**（`chunk_studio/sources.py`）：左栏右键文件设置后，写 `data/sources.json`（`{"categories": [...类别], "files": {law_name: 类别}}`，类别列表内置四项、可新增自定义项）并把该文件 `chunks.jsonl` 所有行统一改成该类别；有草稿时草稿块同步并按新基线重命名；改类别算一次编辑（审核状态 `in_review`）。重新切块后由 `chunker` 按 `sources.json` 回填，不会丢；`source` 不参与 `chunk_hash`；
 - `token_len` / `chunk_hash` 按新增正文重算；`part_index=1 / part_total=1`；
 - 视图层：`span` = 选区行区间（1-based 闭区间），`align="manual"`、`manual=true`，`extras={"region":"body"}`（P3 导出时补 `profile/namespace/probe`）；
 - 纯空白选区会被后端拒绝（「新增切片正文不能为空」）。

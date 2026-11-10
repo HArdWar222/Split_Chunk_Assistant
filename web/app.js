@@ -39,6 +39,7 @@
     deleteSel: new Set(),     // 删除模式中勾选的文件 key
     deleteAnchor: "",         // Shift 连选锚点 key
     viewState: {},             // 每个文件的滚动/选中位置（切回来不回到目录）
+    sourceCategories: [],      // 来源类别列表（内置 + 自定义，来自 /api/files）
     programmaticScroll: 0, // 最近一次程序化滚动的时刻（避免把菜单/光标误关）
     draftTimer: 0 // 草稿自动保存的防抖定时器
   };
@@ -128,6 +129,19 @@
     choiceTitle: document.getElementById("choice-title"),
     choiceText: document.getElementById("choice-text"),
     choiceActions: document.getElementById("choice-actions"),
+    sourceDialog: document.getElementById("source-dialog"),
+    sourceDialogTitle: document.getElementById("source-dialog-title"),
+    sourceDialogHint: document.getElementById("source-dialog-hint"),
+    sourceCurrent: document.getElementById("source-current"),
+    sourceCurrentLabel: document.getElementById("source-current-label"),
+    sourceMenu: document.getElementById("source-menu"),
+    sourceMenuItems: document.getElementById("source-menu-items"),
+    sourceAdd: document.getElementById("source-add"),
+    sourceAddRow: document.getElementById("source-add-row"),
+    sourceNewName: document.getElementById("source-new-name"),
+    sourceAddOk: document.getElementById("source-add-ok"),
+    sourceAddCancel: document.getElementById("source-add-cancel"),
+    sourceClose: document.getElementById("source-close"),
     toast: document.getElementById("toast"),
     splitCaret: document.getElementById("split-caret"),
     splitHint: document.getElementById("split-hint"),
@@ -837,6 +851,7 @@
     return getJSON("/api/files").then(function (data) {
       state.data = data;
       state.config = data.config || state.config;
+      state.sourceCategories = (data && Array.isArray(data.source_categories)) ? data.source_categories.slice() : [];
       renderStats(data);
       renderTree();
       setStatus("就绪 · 点击左侧文件查看原文与切片", "ok");
@@ -934,38 +949,90 @@
     ev.preventDefault();
     hideCtxMenu();
     el.ctxMenu.innerHTML = "";
-    el.ctxMenu.appendChild(ctxItem("🏷 来源类别…", file.source_category || "未设置", function () { pickFileSource(file); }));
+    el.ctxMenu.appendChild(ctxItem("🏷 来源类别…", file.source_category || "未设置", function () { openSourceDialog(file); }));
     el.ctxMenu.appendChild(ctxItem("🗑 删除此文件…", file.law_name, function () { confirmDeleteFiles([file.key]); }));
     el.ctxMenu.appendChild(ctxItem("📄 打开此文件", file.law_name, function () { selectFile(file); }));
     placeCtxMenu(ev);
   }
 
-  var SOURCE_CATEGORIES = ["法律", "部门规章", "地方标准", "规范性文件"];
+  var DEFAULT_SOURCE_CATEGORIES = ["法律", "部门规章", "地方标准", "规范性文件"];
+  var sourceDialogState = { file: null };
 
-  function pickFileSource(file) {
-    var options = SOURCE_CATEGORIES.map(function (category) {
-      return {
-        label: (file.source_category === category ? "✓ " : "") + category,
-        value: category,
-        primary: file.source_category === category
-      };
+  function sourceCategories() {
+    var list = (state.sourceCategories || []).slice();
+    if (!list.length) list = DEFAULT_SOURCE_CATEGORIES.slice();
+    return list;
+  }
+
+  function openSourceDialog(file) {
+    sourceDialogState.file = file;
+    el.sourceDialogTitle.textContent = "来源类别 · " + file.law_name;
+    el.sourceDialogHint.textContent =
+      "选一个已有类别，或点「＋ 新增自定义来源」新建；设置后会把该文件下所有切片的 source 统一写成它。" +
+      (file.draft ? "该文件有未提交草稿，会一起同步。" : "");
+    el.sourceCurrentLabel.textContent = file.source_category || "未设置";
+    el.sourceAddRow.hidden = true;
+    el.sourceNewName.value = "";
+    closeSourceMenu();
+    renderSourceMenu();
+    el.sourceDialog.scrollTop = 0;
+    if (!el.sourceDialog.open) el.sourceDialog.showModal();
+  }
+
+  function closeSourceMenu() {
+    el.sourceMenu.hidden = true;
+    el.sourceAddRow.hidden = true;
+    el.sourceCurrent.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleSourceMenu(force) {
+    var show = typeof force === "boolean" ? force : el.sourceMenu.hidden;
+    el.sourceMenu.hidden = !show;
+    el.sourceCurrent.setAttribute("aria-expanded", show ? "true" : "false");
+    if (show) {
+      el.sourceAddRow.hidden = true;
+      renderSourceMenu();
+    }
+  }
+
+  function renderSourceMenu() {
+    if (!el.sourceMenuItems) return;
+    var file = sourceDialogState.file;
+    var current = file ? (file.source_category || "") : "";
+    el.sourceMenuItems.innerHTML = "";
+    sourceCategories().forEach(function (category) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "source-item" + (current === category ? " checked" : "");
+      btn.setAttribute("role", "option");
+      btn.setAttribute("aria-selected", current === category ? "true" : "false");
+      btn.textContent = (current === category ? "✓ " : "") + category;
+      btn.addEventListener("click", function () { applyFileSource(category); });
+      el.sourceMenuItems.appendChild(btn);
     });
-    options.push({ label: "未设置", value: "" });
-    options.push({ label: "取消", value: null });
-    askChoice(
-      "来源类别 · " + file.law_name,
-      "选一个类别后，会把该文件下所有切片的 source 统一写成它（提交后检索按这个值过滤）。" +
-        (file.draft ? "该文件有未提交草稿，会一起同步。" : ""),
-      options
-    ).then(function (choice) {
-      if (choice === null) return;
-      setFileSource(file, choice);
-    });
+    var unset = document.createElement("button");
+    unset.type = "button";
+    unset.className = "source-item" + (current ? "" : " checked");
+    unset.setAttribute("role", "option");
+    unset.setAttribute("aria-selected", current ? "false" : "true");
+    unset.textContent = (current ? "" : "✓ ") + "未设置";
+    unset.addEventListener("click", function () { applyFileSource(""); });
+    el.sourceMenuItems.appendChild(unset);
+  }
+
+  function applyFileSource(category) {
+    var file = sourceDialogState.file;
+    if (!file) return;
+    closeSourceMenu();
+    if (el.sourceDialog.open) el.sourceDialog.close();
+    setFileSource(file, category).catch(function () { /* setFileSource 已 toast */ });
   }
 
   function setFileSource(file, category) {
-    postJSON("/api/files/source", { key: file.key, source: category }).then(function (res) {
+    return postJSON("/api/files/source", { key: file.key, source: category }).then(function (res) {
       if (res.files) state.data = res.files;
+      if (Array.isArray(res.categories)) state.sourceCategories = res.categories.slice();
+      else if (res.files && Array.isArray(res.files.source_categories)) state.sourceCategories = res.files.source_categories.slice();
       renderStats(state.data);
       renderTree();
       showToast(
@@ -973,8 +1040,54 @@
         " 个切片 source 设为「" + (res.label || "未设置") + "」",
         "ok"
       );
+      return res;
     }).catch(function (err) {
       showToast("设置来源类别失败：" + err.message, "err");
+      throw err;
+    });
+  }
+
+  function submitNewSource() {
+    var file = sourceDialogState.file;
+    if (!file) return;
+    var name = (el.sourceNewName.value || "").trim();
+    if (!name) {
+      el.sourceNewName.focus();
+      showToast("请输入新来源名称", "warn");
+      return;
+    }
+    closeSourceMenu();
+    setFileSource(file, name).then(function () {
+      if (el.sourceDialog.open) el.sourceDialog.close();
+    }).catch(function () { /* setFileSource 已 toast */ });
+  }
+
+  function bindSourceDialog() {
+    if (!el.sourceDialog) return;
+    el.sourceCurrent.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      toggleSourceMenu();
+    });
+    el.sourceAdd.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      el.sourceAddRow.hidden = false;
+      el.sourceNewName.value = "";
+      el.sourceNewName.focus();
+    });
+    el.sourceAddCancel.addEventListener("click", function () { el.sourceAddRow.hidden = true; });
+    el.sourceAddOk.addEventListener("click", submitNewSource);
+    el.sourceNewName.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") { ev.preventDefault(); submitNewSource(); }
+    });
+    el.sourceClose.addEventListener("click", function () {
+      closeSourceMenu();
+      el.sourceDialog.close();
+    });
+    el.sourceDialog.addEventListener("click", function (ev) {
+      if (ev.target === el.sourceDialog) {
+        closeSourceMenu();
+        el.sourceDialog.close();
+      }
     });
   }
 
@@ -4501,6 +4614,7 @@
       if (key && key !== state.docKey) selectByKey(key);
     });
     bindUploadEvents();
+    bindSourceDialog();
   }
 
   bindEvents();
